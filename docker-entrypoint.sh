@@ -1,23 +1,21 @@
 #!/bin/sh
 set -e
 
-ORIGINAL_CONFIG="/CLIProxyAPI/config.yaml"
+ORIGINAL_CONFIG="/CLIProxyAPI/config/config.yaml"
 EXAMPLE_CONFIG="/CLIProxyAPI/config.example.yaml"
 WORKING_CONFIG=""
 
+# Ensure the config directory exists (for volume mounts)
+mkdir -p /CLIProxyAPI/config
+
 # Determine which config to use as base
-if [ -d "$ORIGINAL_CONFIG" ]; then
-    # config.yaml is a directory (Docker mount issue) - use temp location
-    echo "Warning: config.yaml is a directory (volume mount issue), using temporary config"
-    WORKING_CONFIG="/tmp/config.yaml"
-    cp "$EXAMPLE_CONFIG" "$WORKING_CONFIG"
-elif [ -f "$ORIGINAL_CONFIG" ]; then
+if [ -f "$ORIGINAL_CONFIG" ]; then
     # config.yaml exists and is a regular file - use it in place
-    echo "Using existing config.yaml"
+    echo "Using existing config.yaml from persistent volume"
     WORKING_CONFIG="$ORIGINAL_CONFIG"
 else
     # config.yaml doesn't exist - create from example
-    echo "Config file not found, creating from config.example.yaml"
+    echo "Config file not found in persistent volume, creating from config.example.yaml"
     cp "$EXAMPLE_CONFIG" "$ORIGINAL_CONFIG"
     WORKING_CONFIG="$ORIGINAL_CONFIG"
 fi
