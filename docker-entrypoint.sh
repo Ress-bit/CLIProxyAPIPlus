@@ -39,11 +39,12 @@ if [ -n "$MANAGEMENT_PASSWORD" ]; then
     grep -A 8 "^remote-management:" "$WORKING_CONFIG" || echo "Failed to read config"
 fi
 
-# Execute the main application with config path if needed
-if [ "$WORKING_CONFIG" != "$ORIGINAL_CONFIG" ]; then
-    # Config is in non-default location, pass it as argument
+# Execute the main application
+if [ -n "$WORKING_CONFIG" ]; then
+    # Always pass the config path to ensure the application finds it in the persistent volume
+    echo "Starting application with config: $WORKING_CONFIG"
     exec "$@" -config "$WORKING_CONFIG"
 else
-    # Config is in default location, run normally
+    # Fallback to default behavior
     exec "$@"
 fi
