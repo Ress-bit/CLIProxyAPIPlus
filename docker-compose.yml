@@ -14,6 +14,8 @@ services:
     #   - .env
     environment:
       DEPLOY: ${DEPLOY:-cloud}
+      # Set MANAGEMENT_PASSWORD in Dokploy Environment Variables UI
+      MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD}
     ports:
       - "8317:8317"
       - "8085:8085"
