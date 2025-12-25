@@ -13,8 +13,8 @@ services:
     environment:
       # Cloud deploy mode - allows server to start without config.yaml
       DEPLOY: cloud
-      # Set your management password here (required for accessing management.html)
-      MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD:-change-me-to-a-strong-password}
+      # Management password - set this in Dokploy Environment Variables UI
+      MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD}
     ports:
       - "8317:8317"
       - "8085:8085"
