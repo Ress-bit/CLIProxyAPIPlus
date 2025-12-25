@@ -26,17 +26,19 @@ fi
 if [ -n "$MANAGEMENT_PASSWORD" ]; then
     echo "Injecting MANAGEMENT_PASSWORD from environment variable..."
 
-    # Use sed to update the secret-key line, preserving indentation
-    # This matches the line with "secret-key:" and replaces the entire line
-    sed -i 's/^  secret-key:.*/  secret-key: "'"$MANAGEMENT_PASSWORD"'"/' "$WORKING_CONFIG"
-
-    # Also enable remote access for Dokploy deployments
-    sed -i 's/^  allow-remote:.*/  allow-remote: true/' "$WORKING_CONFIG"
-
-    # Ensure control panel is NOT disabled
-    sed -i 's/^  disable-control-panel:.*/  disable-control-panel: false/' "$WORKING_CONFIG"
+    # Use awk to modify the YAML file - more reliable than sed in Alpine
+    awk -v pwd="$MANAGEMENT_PASSWORD" '
+    /^  secret-key:/ { print "  secret-key: \"" pwd "\""; next }
+    /^  allow-remote:/ { print "  allow-remote: true"; next }
+    /^  disable-control-panel:/ { print "  disable-control-panel: false"; next }
+    { print }
+    ' "$WORKING_CONFIG" > "$WORKING_CONFIG.tmp" && mv "$WORKING_CONFIG.tmp" "$WORKING_CONFIG"
 
     echo "Management password configured, remote access enabled, and control panel enabled"
+
+    # Debug: show the remote-management section
+    echo "Config remote-management section:"
+    grep -A 8 "^remote-management:" "$WORKING_CONFIG" || echo "Failed to read config"
 fi
 
 # Execute the main application with config path if needed
