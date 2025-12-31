@@ -741,7 +741,7 @@ func GetIFlowModels() []*ModelInfo {
 		{ID: "qwen3-235b-a22b-instruct", DisplayName: "Qwen3-235B-A22B-Instruct", Description: "Qwen3 235B A22B Instruct", Created: 1753401600},
 		{ID: "qwen3-235b", DisplayName: "Qwen3-235B-A22B", Description: "Qwen3 235B A22B", Created: 1753401600},
 		{ID: "minimax-m2", DisplayName: "MiniMax-M2", Description: "MiniMax M2", Created: 1758672000},
-		{ID: "minimax-m2.1", DisplayName: "MiniMax-M2.1", Description: "MiniMax M2.1", Created: 1766448000},
+		{ID: "minimax-m2.1", DisplayName: "MiniMax-M2.1", Description: "MiniMax M2.1", Created: 1766448000, Thinking: iFlowThinkingSupport},
 	}
 	models := make([]*ModelInfo, 0, len(entries))
 	for _, entry := range entries {
@@ -780,6 +780,32 @@ func GetAntigravityModelConfig() map[string]*AntigravityModelConfig {
 		"gemini-claude-sonnet-4-5-thinking":       {Thinking: &ThinkingSupport{Min: 1024, Max: 200000, ZeroAllowed: false, DynamicAllowed: true}, MaxCompletionTokens: 64000},
 		"gemini-claude-opus-4-5-thinking":         {Thinking: &ThinkingSupport{Min: 1024, Max: 200000, ZeroAllowed: false, DynamicAllowed: true}, MaxCompletionTokens: 64000},
 	}
+}
+
+// LookupStaticModelInfo searches all static model definitions for a model by ID.
+// Returns nil if no matching model is found.
+func LookupStaticModelInfo(modelID string) *ModelInfo {
+	if modelID == "" {
+		return nil
+	}
+	allModels := [][]*ModelInfo{
+		GetClaudeModels(),
+		GetGeminiModels(),
+		GetGeminiVertexModels(),
+		GetGeminiCLIModels(),
+		GetAIStudioModels(),
+		GetOpenAIModels(),
+		GetQwenModels(),
+		GetIFlowModels(),
+	}
+	for _, models := range allModels {
+		for _, m := range models {
+			if m != nil && m.ID == modelID {
+				return m
+			}
+		}
+	}
+	return nil
 }
 
 // GetGitHubCopilotModels returns the available models for GitHub Copilot.
