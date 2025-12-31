@@ -13,19 +13,23 @@ ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
-# Auto-generate build date if not provided or set to "unknown"
+# Auto-generate build info if not provided or set to defaults
+# Note: .git is excluded in .dockerignore, so we generate fallback values
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    if [ "${BUILD_DATE}" = "unknown" ] || [ -z "${BUILD_DATE}" ]; then \
-        BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+    FINAL_BUILD_DATE="${BUILD_DATE}"; \
+    FINAL_COMMIT="${COMMIT}"; \
+    FINAL_VERSION="${VERSION}"; \
+    if [ "${FINAL_BUILD_DATE}" = "unknown" ] || [ -z "${FINAL_BUILD_DATE}" ]; then \
+        FINAL_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
     fi && \
-    if [ "${COMMIT}" = "none" ] || [ -z "${COMMIT}" ]; then \
-        COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "none"); \
+    if [ "${FINAL_COMMIT}" = "none" ] || [ -z "${FINAL_COMMIT}" ]; then \
+        FINAL_COMMIT=$(date -u +%Y%m%d%H%M%S); \
     fi && \
-    if [ "${VERSION}" = "dev" ] || [ -z "${VERSION}" ]; then \
-        VERSION=$(git describe --tags --always 2>/dev/null || echo "dev"); \
+    if [ "${FINAL_VERSION}" = "dev" ] || [ -z "${FINAL_VERSION}" ]; then \
+        FINAL_VERSION="docker-$(date -u +%Y%m%d)"; \
     fi && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION}-plus' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPIPlus ./cmd/server/
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${FINAL_VERSION}-plus' -X 'main.Commit=${FINAL_COMMIT}' -X 'main.BuildDate=${FINAL_BUILD_DATE}'" -o ./CLIProxyAPIPlus ./cmd/server/
 
 FROM alpine:3.22.0
 
