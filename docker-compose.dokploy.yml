@@ -13,8 +13,21 @@ services:
     environment:
       # Cloud deploy mode - allows server to start without config.yaml
       DEPLOY: cloud
+      
       # Management password - set this in Dokploy Environment Variables UI
       MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD}
+      
+      # Auto-enable streaming optimization (default: true for cloud deployments)
+      # Set to "false" to disable automatic streaming config injection
+      # When enabled, adds:
+      #   - keepalive-seconds: 15 (prevents proxy/load balancer timeouts)
+      #   - bootstrap-retries: 1 (improves connection reliability)
+      ENABLE_STREAMING: ${ENABLE_STREAMING:-true}
+      
+      # Usage statistics - set to "false" to disable permanently
+      # This overrides config.yaml and persists across redeploys
+      # Leave unset to use config.yaml value (default: true)
+      # USAGE_STATISTICS_ENABLED: ${USAGE_STATISTICS_ENABLED}
     ports:
       - "8317:8317"
       - "8085:8085"
