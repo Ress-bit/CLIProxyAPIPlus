@@ -9,7 +9,6 @@ services:
         VERSION: ${VERSION:-dev}
         COMMIT: ${COMMIT:-none}
         BUILD_DATE: ${BUILD_DATE:-unknown}
-    container_name: cli-proxy-api-plus
     environment:
       # Cloud deploy mode - allows server to start without config.yaml
       DEPLOY: cloud
@@ -20,8 +19,8 @@ services:
       # Auto-enable streaming optimization (default: true for cloud deployments)
       # Set to "false" to disable automatic streaming config injection
       # When enabled, adds:
-      #   - keepalive-seconds: 15 (prevents proxy/load balancer timeouts)
-      #   - bootstrap-retries: 1 (improves connection reliability)
+        - keepalive-seconds: 15 (prevents proxy/load balancer timeouts)
+        - bootstrap-retries: 1 (improves connection reliability)
       ENABLE_STREAMING: ${ENABLE_STREAMING:-true}
       
       # Usage statistics - set to "false" to disable permanently
@@ -36,14 +35,37 @@ services:
       - "51121:51121"
       - "11451:11451"
     volumes:
-      # Use named volumes for persistence in Dokploy
+      # ============================================================================
+      # CRITICAL VOLUMES - DO NOT DELETE THESE VOLUMES ON REDEPLOY!
+      # ============================================================================
+      
+      # Auth tokens and OAuth credentials (Google, Claude, Codex, etc.)
+      # Location: /root/.cli-proxy-api/
+      # Contains: *.token.json files with OAuth refresh tokens
+      # NEVER delete this volume or all users will need to re-authenticate!
       - cliproxy_auths:/root/.cli-proxy-api
+      
+      # Application logs and usage statistics
+      # Location: /CLIProxyAPI/logs/
+      # Contains: Application logs and usage tracking data
+      # Safe to delete if you want to reset logs, but usage stats will be lost
       - cliproxy_logs:/CLIProxyAPI/logs
-      # config.yaml mount - persists API keys and settings
-      - cliproxy_config:/CLIProxyAPI/config
+      
+      # Configuration persistence
+      # Location: /data/config.yaml (symlinked to /CLIProxyAPI/config.yaml)
+      # Contains: config.yaml with API keys, settings, and all configuration
+      # The entrypoint script auto-creates config.yaml from config.example.yaml
+      # on first run and creates a symlink at /CLIProxyAPI/config.yaml
+      # This approach ensures the config persists while not overriding the binary
+      - cliproxy_config:/data
+      
     restart: unless-stopped
 
 volumes:
+  # Named volumes for data persistence in Dokploy
+  # These volumes will persist even when containers are recreated/redeployed
+  # DO NOT delete these volumes unless you want to lose all data!
   cliproxy_auths:
   cliproxy_logs:
   cliproxy_config:
+
