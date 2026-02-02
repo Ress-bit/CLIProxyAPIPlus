@@ -19,8 +19,8 @@ services:
       # Auto-enable streaming optimization (default: true for cloud deployments)
       # Set to "false" to disable automatic streaming config injection
       # When enabled, adds:
-        - keepalive-seconds: 15 (prevents proxy/load balancer timeouts)
-        - bootstrap-retries: 1 (improves connection reliability)
+      #   - keepalive-seconds: 15 (prevents proxy/load balancer timeouts)
+      #   - bootstrap-retries: 1 (improves connection reliability)
       ENABLE_STREAMING: ${ENABLE_STREAMING:-true}
       
       # Usage statistics - set to "false" to disable permanently
