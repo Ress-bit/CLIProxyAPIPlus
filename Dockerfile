@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     ./cmd/server/
 
 # Runtime stage
-FROM alpine:3.22.0
+FROM alpine:3.23
 
 # Install runtime dependencies in one layer
 RUN apk add --no-cache \

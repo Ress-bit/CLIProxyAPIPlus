@@ -5,28 +5,29 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        VERSION: ${VERSION:-dev}
-        COMMIT: ${COMMIT:-none}
-        BUILD_DATE: ${BUILD_DATE:-unknown}
     environment:
       # Cloud deploy mode - allows server to start without config.yaml
       DEPLOY: cloud
-      
+
       # Management password - set this in Dokploy Environment Variables UI
       MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD}
-      
+
       # Auto-enable streaming optimization (default: true for cloud deployments)
       # Set to "false" to disable automatic streaming config injection
       # When enabled, adds:
       #   - keepalive-seconds: 15 (prevents proxy/load balancer timeouts)
       #   - bootstrap-retries: 1 (improves connection reliability)
       ENABLE_STREAMING: ${ENABLE_STREAMING:-true}
-      
+
       # Usage statistics - set to "false" to disable permanently
       # This overrides config.yaml and persists across redeploys
       # Leave unset to use config.yaml value (default: true)
       # USAGE_STATISTICS_ENABLED: ${USAGE_STATISTICS_ENABLED}
+
+      # Usage statistics persistence - auto-export on stop, auto-import on start
+      # This ensures usage data survives container rebuilds/restarts
+      USAGE_STATS_PERSIST: "true"
+      USAGE_STATS_FILE: /data/usage-stats.json
     ports:
       - "8317:8317"
       - "8085:8085"
@@ -38,19 +39,19 @@ services:
       # ============================================================================
       # CRITICAL VOLUMES - DO NOT DELETE THESE VOLUMES ON REDEPLOY!
       # ============================================================================
-      
+
       # Auth tokens and OAuth credentials (Google, Claude, Codex, etc.)
       # Location: /root/.cli-proxy-api/
       # Contains: *.token.json files with OAuth refresh tokens
       # NEVER delete this volume or all users will need to re-authenticate!
       - cliproxy_auths:/root/.cli-proxy-api
-      
+
       # Application logs and usage statistics
       # Location: /CLIProxyAPI/logs/
       # Contains: Application logs and usage tracking data
       # Safe to delete if you want to reset logs, but usage stats will be lost
       - cliproxy_logs:/CLIProxyAPI/logs
-      
+
       # Configuration persistence
       # Location: /data/config.yaml (symlinked to /CLIProxyAPI/config.yaml)
       # Contains: config.yaml with API keys, settings, and all configuration
@@ -58,8 +59,15 @@ services:
       # on first run and creates a symlink at /CLIProxyAPI/config.yaml
       # This approach ensures the config persists while not overriding the binary
       - cliproxy_config:/data
-      
+
     restart: unless-stopped
+    # Docker Compose health check to ensure service is ready
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8317/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 volumes:
   # Named volumes for data persistence in Dokploy
