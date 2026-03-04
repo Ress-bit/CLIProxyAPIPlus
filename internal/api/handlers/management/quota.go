@@ -28,6 +28,9 @@ func (h *Handler) PutSwitchPreviewModel(c *gin.Context) {
 
 // KiroQuotaResponse represents the quota information for Kiro (AWS CodeWhisperer)
 type KiroQuotaResponse struct {
+	AuthIndex        string                `json:"auth_index"`
+	Email            string                `json:"email,omitempty"`
+	ProfileArn       string                `json:"profile_arn,omitempty"`
 	TotalLimit       float64               `json:"total_limit"`
 	CurrentUsage     float64               `json:"current_usage"`
 	RemainingQuota   float64               `json:"remaining_quota"`
@@ -122,8 +125,20 @@ func (h *Handler) GetKiroQuota(c *gin.Context) {
 		usagePercentage = (quotaStatus.CurrentUsage / quotaStatus.TotalLimit) * 100
 	}
 
+	// Extract email from auth metadata
+	email, _ := auth.Metadata["email"].(string)
+	if email == "" {
+		email = auth.Attributes["email"]
+	}
+
+	// Ensure auth index is set
+	auth.EnsureIndex()
+
 	// Build response
 	response := KiroQuotaResponse{
+		AuthIndex:       auth.Index,
+		Email:           email,
+		ProfileArn:      profileArn,
 		TotalLimit:      quotaStatus.TotalLimit,
 		CurrentUsage:    quotaStatus.CurrentUsage,
 		RemainingQuota:  quotaStatus.RemainingQuota,
