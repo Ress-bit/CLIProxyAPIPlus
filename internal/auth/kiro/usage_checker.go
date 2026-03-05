@@ -52,6 +52,30 @@ type UsageChecker struct {
 	httpClient *http.Client
 }
 
+func parseUnixTimestampAuto(value float64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+
+	seconds := value
+	switch {
+	case value >= 1e18:
+		seconds = value / 1e9
+	case value >= 1e15: 
+		seconds = value / 1e6
+	case value >= 1e12:
+		seconds = value / 1e3
+	}
+
+	secPart := int64(seconds)
+	nanoPart := int64((seconds - float64(secPart)) * float64(time.Second))
+	if nanoPart < 0 {
+		nanoPart = 0
+	}
+
+	return time.Unix(secPart, nanoPart)
+}
+
 // NewUsageChecker creates a new UsageChecker instance.
 func NewUsageChecker(cfg *config.Config) *UsageChecker {
 	return &UsageChecker{
@@ -200,7 +224,7 @@ func (c *UsageChecker) GetQuotaStatus(ctx context.Context, tokenData *KiroTokenD
 	}
 
 	if usage.NextDateReset > 0 {
-		status.NextReset = time.Unix(int64(usage.NextDateReset/1000), 0)
+		status.NextReset = parseUnixTimestampAuto(usage.NextDateReset)
 	}
 
 	return status, nil
