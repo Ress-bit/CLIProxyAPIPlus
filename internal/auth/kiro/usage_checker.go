@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -21,10 +22,19 @@ type UsageQuotaResponse struct {
 	NextDateReset      float64                  `json:"nextDateReset,omitempty"`
 }
 
+// KiroCreditsResponse represents the getUserCredits API response in a normalized form.
+type KiroCreditsResponse struct {
+	RemainingCredits float64
+	TotalCredits     float64
+	HasTotalCredits  bool
+	ResetDate        *time.Time
+	SubscriptionType string
+}
+
 // UsageBreakdownExtended represents detailed usage information for quota checking.
 // Note: UsageBreakdown is already defined in codewhisperer_client.go
 type UsageBreakdownExtended struct {
-	ResourceType              string                 `json:"resourceType"`
+	UsageBreakdown
 	UsageLimitWithPrecision   float64                `json:"usageLimitWithPrecision"`
 	CurrentUsageWithPrecision float64                `json:"currentUsageWithPrecision"`
 	FreeTrialInfo             *FreeTrialInfoExtended `json:"freeTrialInfo,omitempty"`
@@ -32,9 +42,11 @@ type UsageBreakdownExtended struct {
 
 // FreeTrialInfoExtended represents free trial usage information.
 type FreeTrialInfoExtended struct {
-	FreeTrialStatus           string  `json:"freeTrialStatus"`
-	UsageLimitWithPrecision   float64 `json:"usageLimitWithPrecision"`
-	CurrentUsageWithPrecision float64 `json:"currentUsageWithPrecision"`
+	FreeTrialStatus           string   `json:"freeTrialStatus"`
+	FreeTrialExpiry           *float64 `json:"freeTrialExpiry,omitempty"`
+	UsageLimitWithPrecision   float64  `json:"usageLimitWithPrecision"`
+	CurrentUsageWithPrecision float64  `json:"currentUsageWithPrecision"`
+	NextDateReset             *float64 `json:"nextDateReset,omitempty"`
 }
 
 // QuotaStatus represents the quota status for a token.
@@ -61,7 +73,7 @@ func parseUnixTimestampAuto(value float64) time.Time {
 	switch {
 	case value >= 1e18:
 		seconds = value / 1e9
-	case value >= 1e15: 
+	case value >= 1e15:
 		seconds = value / 1e6
 	case value >= 1e12:
 		seconds = value / 1e3
@@ -74,6 +86,91 @@ func parseUnixTimestampAuto(value float64) time.Time {
 	}
 
 	return time.Unix(secPart, nanoPart)
+}
+
+func ParseUnixTimestamp(value *float64) *time.Time {
+	if value == nil {
+		return nil
+	}
+	t := parseUnixTimestampAuto(*value)
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func parseFlexibleTimeValue(value any) *time.Time {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case float64:
+		return ParseUnixTimestamp(&typed)
+	case float32:
+		v := float64(typed)
+		return ParseUnixTimestamp(&v)
+	case int64:
+		v := float64(typed)
+		return ParseUnixTimestamp(&v)
+	case int:
+		v := float64(typed)
+		return ParseUnixTimestamp(&v)
+	case json.Number:
+		if f, err := typed.Float64(); err == nil {
+			return ParseUnixTimestamp(&f)
+		}
+	case string:
+		if typed == "" {
+			return nil
+		}
+		if f, err := strconv.ParseFloat(typed, 64); err == nil {
+			return ParseUnixTimestamp(&f)
+		}
+		if t, err := time.Parse(time.RFC3339, typed); err == nil {
+			return &t
+		}
+		if t, err := time.Parse("2006-01-02T15:04:05.000Z", typed); err == nil {
+			return &t
+		}
+	}
+
+	return nil
+}
+
+func parseFloatValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return 0, false
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		v, err := typed.Float64()
+		return v, err == nil
+	case string:
+		if typed == "" {
+			return 0, false
+		}
+		v, err := strconv.ParseFloat(typed, 64)
+		return v, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func parseStringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
 }
 
 // NewUsageChecker creates a new UsageChecker instance.
@@ -141,6 +238,73 @@ func (c *UsageChecker) CheckUsage(ctx context.Context, tokenData *KiroTokenData)
 	return &result, nil
 }
 
+// CheckCredits retrieves Kiro credits using the same endpoint pattern as Kiro IDE and OmniRoute.
+func (c *UsageChecker) CheckCredits(ctx context.Context, tokenData *KiroTokenData) (*KiroCreditsResponse, error) {
+	if tokenData == nil {
+		return nil, fmt.Errorf("token data is nil")
+	}
+	if tokenData.AccessToken == "" {
+		return nil, fmt.Errorf("access token is empty")
+	}
+
+	url := buildURL(GetCodeWhispererLegacyEndpoint("us-east-1"), "getUserCredits", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create credits request: %w", err)
+	}
+
+	accountKey := GetAccountKey(tokenData.ClientID, tokenData.RefreshToken)
+	setRuntimeHeaders(req, tokenData.AccessToken, accountKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("credits request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read credits response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("credits API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse credits response: %w", err)
+	}
+
+	result := &KiroCreditsResponse{
+		SubscriptionType: parseStringValue(raw["subscriptionType"]),
+	}
+	if result.SubscriptionType == "" {
+		result.SubscriptionType = parseStringValue(raw["subscription_type"])
+	}
+
+	if remaining, ok := parseFloatValue(raw["remainingCredits"]); ok {
+		result.RemainingCredits = remaining
+	} else if remaining, ok := parseFloatValue(raw["remaining_credits"]); ok {
+		result.RemainingCredits = remaining
+	}
+
+	if total, ok := parseFloatValue(raw["totalCredits"]); ok {
+		result.TotalCredits = total
+		result.HasTotalCredits = true
+	} else if total, ok := parseFloatValue(raw["total_credits"]); ok {
+		result.TotalCredits = total
+		result.HasTotalCredits = true
+	}
+
+	result.ResetDate = parseFlexibleTimeValue(raw["resetDate"])
+	if result.ResetDate == nil {
+		result.ResetDate = parseFlexibleTimeValue(raw["reset_date"])
+	}
+
+	return result, nil
+}
+
 // CheckUsageByAccessToken retrieves usage limits using an access token and profile ARN directly.
 func (c *UsageChecker) CheckUsageByAccessToken(ctx context.Context, accessToken, profileArn string) (*UsageQuotaResponse, error) {
 	tokenData := &KiroTokenData{
@@ -201,10 +365,17 @@ func (c *UsageChecker) GetQuotaStatus(ctx context.Context, tokenData *KiroTokenD
 	if err != nil {
 		return nil, err
 	}
+	return BuildQuotaStatus(usage), nil
+}
 
-	status := &QuotaStatus{
-		IsExhausted: IsQuotaExhausted(usage),
+// BuildQuotaStatus builds quota summary from existing UsageQuotaResponse.
+func BuildQuotaStatus(usage *UsageQuotaResponse) *QuotaStatus {
+	status := &QuotaStatus{IsExhausted: true}
+	if usage == nil {
+		return status
 	}
+
+	status.IsExhausted = IsQuotaExhausted(usage)
 
 	if len(usage.UsageBreakdownList) > 0 {
 		breakdown := usage.UsageBreakdownList[0]
@@ -227,7 +398,7 @@ func (c *UsageChecker) GetQuotaStatus(ctx context.Context, tokenData *KiroTokenD
 		status.NextReset = parseUnixTimestampAuto(usage.NextDateReset)
 	}
 
-	return status, nil
+	return status
 }
 
 // CalculateAvailableCount calculates the available request count based on usage limits.
