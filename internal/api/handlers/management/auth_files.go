@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/antigravity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
+	codebuddyauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codebuddy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/copilot"
 	cursorauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/cursor"
@@ -37,6 +38,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kimi"
 	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
@@ -50,6 +52,17 @@ import (
 )
 
 var lastRefreshKeys = []string{"last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"}
+
+const codeBuddyPollingNotSupportedError = "codebuddy_polling_not_supported"
+
+type codeBuddyAuthService interface {
+	FetchAuthState(context.Context) (*codebuddyauth.AuthState, error)
+	PollForToken(context.Context, string) (*codebuddyauth.CodeBuddyTokenStorage, error)
+}
+
+var newCodeBuddyAuthService = func(cfg *config.Config) codeBuddyAuthService {
+	return codebuddyauth.NewCodeBuddyAuth(cfg)
+}
 
 const (
 	anthropicCallbackPort = 54545
@@ -341,9 +354,10 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 			// Read file to get type field
 			full := filepath.Join(h.cfg.AuthDir, name)
 			if data, errRead := os.ReadFile(full); errRead == nil {
-				typeValue := gjson.GetBytes(data, "type").String()
+				typeValue := normalizeAuthProvider(gjson.GetBytes(data, "type").String())
 				emailValue := gjson.GetBytes(data, "email").String()
 				fileData["type"] = typeValue
+				fileData["provider"] = typeValue
 				fileData["email"] = emailValue
 				if pv := gjson.GetBytes(data, "priority"); pv.Exists() {
 					switch pv.Type {
@@ -385,12 +399,13 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if name == "" {
 		name = auth.ID
 	}
+	provider := normalizeAuthProvider(auth.Provider)
 	entry := gin.H{
 		"id":             auth.ID,
 		"auth_index":     auth.Index,
 		"name":           name,
-		"type":           strings.TrimSpace(auth.Provider),
-		"provider":       strings.TrimSpace(auth.Provider),
+		"type":           provider,
+		"provider":       provider,
 		"label":          auth.Label,
 		"status":         auth.Status,
 		"status_message": auth.StatusMessage,
@@ -562,6 +577,17 @@ func isUnsafeAuthFileName(name string) bool {
 		return true
 	}
 	return false
+}
+
+func normalizeAuthProvider(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return trimmed
+	}
+	if canonical, err := NormalizeOAuthProvider(trimmed); err == nil {
+		return canonical
+	}
+	return strings.ToLower(trimmed)
 }
 
 // Download single auth file by name
@@ -1006,9 +1032,11 @@ func (h *Handler) buildAuthFromFileData(path string, data []byte) (*coreauth.Aut
 		return nil, fmt.Errorf("invalid auth file: %w", err)
 	}
 	provider, _ := metadata["type"].(string)
+	provider = normalizeAuthProvider(provider)
 	if provider == "" {
 		provider = "unknown"
 	}
+	metadata["type"] = provider
 	label := provider
 	if email, ok := metadata["email"].(string); ok && email != "" {
 		label = email
@@ -1062,6 +1090,75 @@ func (h *Handler) upsertAuthRecord(ctx context.Context, auth *coreauth.Auth) err
 	}
 	_, err := h.authManager.Register(ctx, auth)
 	return err
+}
+
+func (h *Handler) RequestCodeBuddyToken(c *gin.Context) {
+	ctx := context.Background()
+	ctx = PopulateAuthContext(ctx, c)
+
+	state := fmt.Sprintf("codebuddy-%d", time.Now().UnixNano())
+	authSvc := newCodeBuddyAuthService(h.cfg)
+	authState, err := authSvc.FetchAuthState(ctx)
+	if err != nil {
+		log.Errorf("Failed to initialize CodeBuddy auth state: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
+		return
+	}
+	if authState == nil || strings.TrimSpace(authState.State) == "" || strings.TrimSpace(authState.AuthURL) == "" {
+		c.JSON(http.StatusConflict, gin.H{"error": codeBuddyPollingNotSupportedError})
+		return
+	}
+
+	RegisterOAuthSession(state, "codebuddy")
+
+	go func(localState, remoteState string) {
+		storage, errPoll := authSvc.PollForToken(ctx, remoteState)
+		if errPoll != nil {
+			SetOAuthSessionError(localState, "Authentication failed")
+			log.Errorf("CodeBuddy authentication failed: %v", errPoll)
+			return
+		}
+		if storage == nil {
+			SetOAuthSessionError(localState, "Authentication failed")
+			return
+		}
+
+		storage.Type = "codebuddy"
+		identifier := strings.TrimSpace(storage.UserID)
+		if identifier == "" {
+			identifier = fmt.Sprintf("%d", time.Now().UnixMilli())
+			storage.UserID = identifier
+		}
+		fileName := fmt.Sprintf("codebuddy-%s.json", identifier)
+		record := &coreauth.Auth{
+			ID:       fileName,
+			Provider: "codebuddy",
+			FileName: fileName,
+			Label:    identifier,
+			Storage:  storage,
+			Metadata: map[string]any{
+				"type":          "codebuddy",
+				"access_token":  storage.AccessToken,
+				"refresh_token": storage.RefreshToken,
+				"user_id":       identifier,
+				"domain":        storage.Domain,
+				"expires_in":    storage.ExpiresIn,
+			},
+		}
+
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
+			SetOAuthSessionError(localState, "Failed to save authentication tokens")
+			log.Errorf("Failed to save CodeBuddy authentication tokens: %v", errSave)
+			return
+		}
+
+		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+		CompleteOAuthSession(localState)
+		CompleteOAuthSessionsByProvider("codebuddy")
+	}(state, strings.TrimSpace(authState.State))
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": strings.TrimSpace(authState.AuthURL), "state": state})
 }
 
 // PatchAuthFileStatus toggles the disabled state of an auth file
@@ -3382,6 +3479,10 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 
 	_, status, ok := GetOAuthSession(state)
 	if !ok {
+		if strings.HasPrefix(strings.ToLower(state), "codebuddy-") {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Authentication session expired or not found"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}

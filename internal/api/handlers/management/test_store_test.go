@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"sync"
+	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -47,3 +48,14 @@ func (s *memoryAuthStore) Delete(_ context.Context, id string) error {
 }
 
 func (s *memoryAuthStore) SetBaseDir(string) {}
+
+func requireEventually(t interface{ Fatalf(string, ...any) }, condition func() bool) {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met before timeout")
+}
