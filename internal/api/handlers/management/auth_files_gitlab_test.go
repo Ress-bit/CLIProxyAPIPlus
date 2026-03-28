@@ -312,9 +312,16 @@ func TestRequestCodeBuddyToken_SavesAuthRecord(t *testing.T) {
 	close(fake.pollBlock)
 
 	requireEventually(t, func() bool {
-		_, _, exists := GetOAuthSession(state)
-		return !exists
+		_, currentStatus, exists := GetOAuthSession(state)
+		return exists && currentStatus == oauthSessionSuccess
 	})
+	_, successStatus, ok := GetOAuthSession(state)
+	if !ok {
+		t.Fatal("expected OAuth session to remain registered after success")
+	}
+	if successStatus != oauthSessionSuccess {
+		t.Fatalf("success status = %q, want %q", successStatus, oauthSessionSuccess)
+	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -459,6 +466,29 @@ func TestGetAuthStatus_CodeBuddyWaitOkAndErrorShapes(t *testing.T) {
 		assertJSONShape(t, resp, "status")
 		if got := resp["status"]; got != "ok" {
 			t.Fatalf("success response status = %#v, want ok", got)
+		}
+	})
+
+	t.Run("ok after successful codebuddy completion even after provider cleanup", func(t *testing.T) {
+		state := "codebuddy-test-state-success-cleanup"
+		RegisterOAuthSession(state, "codebuddy")
+		SetOAuthSessionSuccess(state)
+		CompleteOAuthSessionsByProvider("codebuddy")
+
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status?state="+state, nil)
+		h.GetAuthStatus(ctx)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("success cleanup status code = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode success cleanup response: %v", err)
+		}
+		assertJSONShape(t, resp, "status")
+		if got := resp["status"]; got != "ok" {
+			t.Fatalf("success cleanup response status = %#v, want ok", got)
 		}
 	})
 }
