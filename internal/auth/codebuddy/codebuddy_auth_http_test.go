@@ -183,7 +183,7 @@ func TestRefreshToken_Success(t *testing.T) {
 	}
 }
 
-func TestRefreshToken_DefaultDomain(t *testing.T) {
+func TestCodeBuddyRefreshToken_DefaultDomain_UsesExternalDefault(t *testing.T) {
 	var receivedDomain string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedDomain = r.Header.Get("X-Domain")
@@ -195,7 +195,7 @@ func TestRefreshToken_DefaultDomain(t *testing.T) {
 				"refreshToken": "rt",
 				"expiresIn":    3600,
 				"tokenType":    "bearer",
-				"domain":       DefaultDomain,
+				"domain":       "www.codebuddy.ai",
 			},
 		})
 	}))
@@ -206,8 +206,8 @@ func TestRefreshToken_DefaultDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if receivedDomain != DefaultDomain {
-		t.Errorf("expected default domain '%s', got '%s'", DefaultDomain, receivedDomain)
+	if receivedDomain != "www.codebuddy.ai" {
+		t.Errorf("expected default domain '%s', got '%s'", "www.codebuddy.ai", receivedDomain)
 	}
 }
 

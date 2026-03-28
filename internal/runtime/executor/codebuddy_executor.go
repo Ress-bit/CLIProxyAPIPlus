@@ -19,8 +19,18 @@ import (
 )
 
 const (
-	codeBuddyChatPath = "/v2/chat/completions"
-	codeBuddyAuthType = "codebuddy"
+	codeBuddyChatPath        = "/v2/chat/completions"
+	codeBuddyAuthType        = "codebuddy"
+	codeBuddyOpenAIProtocol  = "openai"
+	codeBuddyContentTypeJSON = "application/json"
+	codeBuddySSEAccept       = "text/event-stream"
+	codeBuddyCacheControl    = "no-cache"
+	codeBuddyProduct         = "SaaS"
+	codeBuddyIDEType         = "CLI"
+	codeBuddyIDEName         = "CLI"
+	codeBuddyIDEVersion      = "2.63.2"
+	codeBuddyRequestedWith   = "XMLHttpRequest"
+	codeBuddyBearerPrefix    = "Bearer "
 )
 
 // CodeBuddyExecutor handles requests to the CodeBuddy API.
@@ -36,7 +46,7 @@ func NewCodeBuddyExecutor(cfg *config.Config) *CodeBuddyExecutor {
 // Identifier returns the unique identifier for this executor.
 func (e *CodeBuddyExecutor) Identifier() string { return codeBuddyAuthType }
 
-// codeBuddyCredentials extracts the access token and domain from auth metadata.
+// codeBuddyCredentials extracts the access token, user ID, and effective domain from auth metadata.
 func codeBuddyCredentials(auth *cliproxyauth.Auth) (accessToken, userID, domain string) {
 	if auth == nil {
 		return "", "", ""
@@ -45,7 +55,7 @@ func codeBuddyCredentials(auth *cliproxyauth.Auth) (accessToken, userID, domain 
 	userID = metaStringValue(auth.Metadata, "user_id")
 	domain = metaStringValue(auth.Metadata, "domain")
 	if domain == "" {
-		domain = codebuddy.DefaultDomain
+		domain = codebuddy.ExternalDomain
 	}
 	return
 }
@@ -92,7 +102,7 @@ func (e *CodeBuddyExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	}
 
 	from := opts.SourceFormat
-	to := sdktranslator.FromString("openai")
+	to := sdktranslator.FromString(codeBuddyOpenAIProtocol)
 
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -108,7 +118,7 @@ func (e *CodeBuddyExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		return resp, err
 	}
 
-	url := codebuddy.BaseURL + codeBuddyChatPath
+	url := codebuddy.ExternalBaseURL + codeBuddyChatPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
 		return resp, err
@@ -182,7 +192,7 @@ func (e *CodeBuddyExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	}
 
 	from := opts.SourceFormat
-	to := sdktranslator.FromString("openai")
+	to := sdktranslator.FromString(codeBuddyOpenAIProtocol)
 
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -198,14 +208,14 @@ func (e *CodeBuddyExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		return nil, err
 	}
 
-	url := codebuddy.BaseURL + codeBuddyChatPath
+	url := codebuddy.ExternalBaseURL + codeBuddyChatPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
 		return nil, err
 	}
 	e.applyHeaders(httpReq, accessToken, userID, domain)
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Cache-Control", "no-cache")
+	httpReq.Header.Set("Accept", codeBuddySSEAccept)
+	httpReq.Header.Set("Cache-Control", codeBuddyCacheControl)
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -329,15 +339,15 @@ func (e *CodeBuddyExecutor) CountTokens(_ context.Context, _ *cliproxyauth.Auth,
 
 // applyHeaders sets required headers for CodeBuddy API requests.
 func (e *CodeBuddyExecutor) applyHeaders(req *http.Request, accessToken, userID, domain string) {
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", codeBuddyBearerPrefix+accessToken)
+	req.Header.Set("Content-Type", codeBuddyContentTypeJSON)
+	req.Header.Set("Accept", codeBuddyContentTypeJSON)
 	req.Header.Set("User-Agent", codebuddy.UserAgent)
 	req.Header.Set("X-User-Id", userID)
 	req.Header.Set("X-Domain", domain)
-	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-IDE-Type", "CLI")
-	req.Header.Set("X-IDE-Name", "CLI")
-	req.Header.Set("X-IDE-Version", "2.63.2")
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("X-Product", codeBuddyProduct)
+	req.Header.Set("X-IDE-Type", codeBuddyIDEType)
+	req.Header.Set("X-IDE-Name", codeBuddyIDEName)
+	req.Header.Set("X-IDE-Version", codeBuddyIDEVersion)
+	req.Header.Set("X-Requested-With", codeBuddyRequestedWith)
 }

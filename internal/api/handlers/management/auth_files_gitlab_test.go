@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -18,12 +20,36 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
+func assertJSONShape(t *testing.T, payload map[string]any, keys ...string) {
+	t.Helper()
+
+	if len(payload) != len(keys) {
+		t.Fatalf("response keys = %v, want exactly %v", mapKeys(payload), keys)
+	}
+
+	for _, key := range keys {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("response missing key %q; keys = %v", key, mapKeys(payload))
+		}
+	}
+}
+
+func mapKeys(payload map[string]any) []string {
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 type fakeCodeBuddyService struct {
 	fetchState *codebuddyauth.AuthState
 	fetchErr   error
 	pollResult *codebuddyauth.CodeBuddyTokenStorage
 	pollErr    error
 	pollState  string
+	pollMu     sync.Mutex
 	pollCalls  atomic.Int32
 	pollBlock  chan struct{}
 }
@@ -41,7 +67,9 @@ func (f *fakeCodeBuddyService) FetchAuthState(context.Context) (*codebuddyauth.A
 
 func (f *fakeCodeBuddyService) PollForToken(_ context.Context, state string) (*codebuddyauth.CodeBuddyTokenStorage, error) {
 	f.pollCalls.Add(1)
+	f.pollMu.Lock()
 	f.pollState = state
+	f.pollMu.Unlock()
 	if f.pollBlock != nil {
 		<-f.pollBlock
 	}
@@ -53,6 +81,12 @@ func (f *fakeCodeBuddyService) PollForToken(_ context.Context, state string) (*c
 	}
 	clone := *f.pollResult
 	return &clone, nil
+}
+
+func (f *fakeCodeBuddyService) recordedPollState() string {
+	f.pollMu.Lock()
+	defer f.pollMu.Unlock()
+	return f.pollState
 }
 
 func TestRequestGitLabPATToken_SavesAuthRecord(t *testing.T) {
@@ -224,6 +258,8 @@ func TestRequestCodeBuddyToken_SavesAuthRecord(t *testing.T) {
 
 	prevFactory := newCodeBuddyAuthService
 	fake := &fakeCodeBuddyService{
+		// Keep the login URL fixture neutral while the saved token domain matches
+		// the external CodeBuddy environment defaults.
 		fetchState: &codebuddyauth.AuthState{State: "remote-state-123", AuthURL: "https://codebuddy.example.com/login"},
 		pollBlock:  make(chan struct{}),
 		pollResult: &codebuddyauth.CodeBuddyTokenStorage{
@@ -231,7 +267,7 @@ func TestRequestCodeBuddyToken_SavesAuthRecord(t *testing.T) {
 			RefreshToken: "refresh-token",
 			ExpiresIn:    7200,
 			TokenType:    "Bearer",
-			Domain:       "www.codebuddy.cn",
+			Domain:       "www.codebuddy.ai",
 			UserID:       "user-123",
 			Type:         "codebuddy",
 		},
@@ -253,6 +289,7 @@ func TestRequestCodeBuddyToken_SavesAuthRecord(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	assertJSONShape(t, resp, "state", "url")
 	if got := resp["url"]; got != "https://codebuddy.example.com/login" {
 		t.Fatalf("url = %#v, want https://codebuddy.example.com/login", got)
 	}
@@ -300,8 +337,8 @@ func TestRequestCodeBuddyToken_SavesAuthRecord(t *testing.T) {
 	if got := fake.pollCalls.Load(); got != 1 {
 		t.Fatalf("poll calls = %d, want 1", got)
 	}
-	if fake.pollState != "remote-state-123" {
-		t.Fatalf("polled state = %q, want remote-state-123", fake.pollState)
+	if got := fake.recordedPollState(); got != "remote-state-123" {
+		t.Fatalf("polled state = %q, want remote-state-123", got)
 	}
 }
 
@@ -334,49 +371,74 @@ func TestRequestCodeBuddyToken_PollingNotSupported(t *testing.T) {
 	}
 }
 
-func TestGetAuthStatus_CodeBuddyPendingAndUnknownState(t *testing.T) {
+func TestGetAuthStatus_CodeBuddyWaitOkAndErrorShapes(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 	gin.SetMode(gin.TestMode)
 
 	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, coreauth.NewManager(nil, nil, nil))
-	state := "codebuddy-test-state"
-	RegisterOAuthSession(state, "codebuddy")
-	t.Cleanup(func() { CompleteOAuthSession(state) })
 
-	recWait := httptest.NewRecorder()
-	ctxWait, _ := gin.CreateTestContext(recWait)
-	ctxWait.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status?state="+state, nil)
-	h.GetAuthStatus(ctxWait)
-	if recWait.Code != http.StatusOK {
-		t.Fatalf("wait status code = %d, want %d", recWait.Code, http.StatusOK)
-	}
-	var waitResp map[string]any
-	if err := json.Unmarshal(recWait.Body.Bytes(), &waitResp); err != nil {
-		t.Fatalf("decode wait response: %v", err)
-	}
-	if got := waitResp["status"]; got != "wait" {
-		t.Fatalf("wait response status = %#v, want wait", got)
-	}
+	t.Run("ok without state", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status", nil)
+		h.GetAuthStatus(ctx)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ok status code = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode ok response: %v", err)
+		}
+		assertJSONShape(t, resp, "status")
+		if got := resp["status"]; got != "ok" {
+			t.Fatalf("ok response status = %#v, want ok", got)
+		}
+	})
 
-	CompleteOAuthSession(state)
+	t.Run("wait with pending codebuddy state", func(t *testing.T) {
+		state := "codebuddy-test-state-wait"
+		RegisterOAuthSession(state, "codebuddy")
+		t.Cleanup(func() { CompleteOAuthSession(state) })
 
-	recUnknown := httptest.NewRecorder()
-	ctxUnknown, _ := gin.CreateTestContext(recUnknown)
-	ctxUnknown.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status?state="+state, nil)
-	h.GetAuthStatus(ctxUnknown)
-	if recUnknown.Code != http.StatusOK {
-		t.Fatalf("unknown status code = %d, want %d", recUnknown.Code, http.StatusOK)
-	}
-	var unknownResp map[string]any
-	if err := json.Unmarshal(recUnknown.Body.Bytes(), &unknownResp); err != nil {
-		t.Fatalf("decode unknown response: %v", err)
-	}
-	if got := unknownResp["status"]; got != "error" {
-		t.Fatalf("unknown response status = %#v, want error", got)
-	}
-	if _, ok := unknownResp["error"].(string); !ok {
-		t.Fatalf("unknown response error = %#v, want string", unknownResp["error"])
-	}
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status?state="+state, nil)
+		h.GetAuthStatus(ctx)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("wait status code = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode wait response: %v", err)
+		}
+		assertJSONShape(t, resp, "status")
+		if got := resp["status"]; got != "wait" {
+			t.Fatalf("wait response status = %#v, want wait", got)
+		}
+	})
+
+	t.Run("error for unknown codebuddy state", func(t *testing.T) {
+		state := "codebuddy-test-state-error"
+
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status?state="+state, nil)
+		h.GetAuthStatus(ctx)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unknown status code = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode unknown response: %v", err)
+		}
+		assertJSONShape(t, resp, "error", "status")
+		if got := resp["status"]; got != "error" {
+			t.Fatalf("unknown response status = %#v, want error", got)
+		}
+		if _, ok := resp["error"].(string); !ok {
+			t.Fatalf("unknown response error = %#v, want string", resp["error"])
+		}
+	})
 }
 
 func TestRequestCodeBuddyToken_PollFailureMarksSessionError(t *testing.T) {
