@@ -1153,7 +1153,7 @@ func (h *Handler) RequestCodeBuddyToken(c *gin.Context) {
 		}
 
 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
-		CompleteOAuthSession(localState)
+		SetOAuthSessionSuccess(localState)
 		CompleteOAuthSessionsByProvider("codebuddy")
 	}(state, strings.TrimSpace(authState.State))
 
@@ -3391,6 +3391,10 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		return
 	}
 	if status != "" {
+		if status == oauthSessionSuccess {
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+			return
+		}
 		if strings.HasPrefix(status, "device_code|") {
 			parts := strings.SplitN(status, "|", 3)
 			if len(parts) == 3 {

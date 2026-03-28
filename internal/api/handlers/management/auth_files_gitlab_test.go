@@ -439,6 +439,28 @@ func TestGetAuthStatus_CodeBuddyWaitOkAndErrorShapes(t *testing.T) {
 			t.Fatalf("unknown response error = %#v, want string", resp["error"])
 		}
 	})
+
+	t.Run("ok after successful codebuddy completion", func(t *testing.T) {
+		state := "codebuddy-test-state-success"
+		RegisterOAuthSession(state, "codebuddy")
+		SetOAuthSessionSuccess(state)
+
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status?state="+state, nil)
+		h.GetAuthStatus(ctx)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("success status code = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode success response: %v", err)
+		}
+		assertJSONShape(t, resp, "status")
+		if got := resp["status"]; got != "ok" {
+			t.Fatalf("success response status = %#v, want ok", got)
+		}
+	})
 }
 
 func TestRequestCodeBuddyToken_PollFailureMarksSessionError(t *testing.T) {
