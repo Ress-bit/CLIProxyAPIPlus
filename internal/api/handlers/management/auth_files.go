@@ -1158,7 +1158,7 @@ func (h *Handler) RequestCodeBuddyToken(c *gin.Context) {
 		CompleteOAuthSessionsByProvider("codebuddy")
 	}(state, strings.TrimSpace(authState.State))
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": strings.TrimSpace(authState.AuthURL), "state": state})
+	c.JSON(http.StatusOK, gin.H{"url": strings.TrimSpace(authState.AuthURL), "state": state})
 }
 
 // PatchAuthFileStatus toggles the disabled state of an auth file
