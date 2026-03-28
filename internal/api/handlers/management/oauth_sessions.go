@@ -146,6 +146,9 @@ func (s *oauthSessionStore) CompleteProvider(provider string) int {
 	removed := 0
 	for state, session := range s.sessions {
 		if strings.EqualFold(session.Provider, provider) {
+			if session.Status == oauthSessionSuccess {
+				continue
+			}
 			delete(s.sessions, state)
 			removed++
 		}
