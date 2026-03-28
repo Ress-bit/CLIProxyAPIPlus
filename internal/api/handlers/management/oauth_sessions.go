@@ -14,6 +14,7 @@ import (
 const (
 	oauthSessionTTL     = 10 * time.Minute
 	maxOAuthStateLength = 128
+	oauthSessionSuccess = "ok"
 )
 
 var (
@@ -97,6 +98,26 @@ func (s *oauthSessionStore) SetError(state, message string) {
 	s.sessions[state] = session
 }
 
+func (s *oauthSessionStore) SetSuccess(state string) {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return
+	}
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.purgeExpiredLocked(now)
+	session, ok := s.sessions[state]
+	if !ok {
+		return
+	}
+	session.Status = oauthSessionSuccess
+	session.ExpiresAt = now.Add(s.ttl)
+	s.sessions[state] = session
+}
+
 func (s *oauthSessionStore) Complete(state string) {
 	state = strings.TrimSpace(state)
 	if state == "" {
@@ -176,6 +197,8 @@ var oauthSessions = newOAuthSessionStore(oauthSessionTTL)
 func RegisterOAuthSession(state, provider string) { oauthSessions.Register(state, provider) }
 
 func SetOAuthSessionError(state, message string) { oauthSessions.SetError(state, message) }
+
+func SetOAuthSessionSuccess(state string) { oauthSessions.SetSuccess(state) }
 
 func CompleteOAuthSession(state string) { oauthSessions.Complete(state) }
 
