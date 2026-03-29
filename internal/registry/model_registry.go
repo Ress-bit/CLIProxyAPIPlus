@@ -742,9 +742,17 @@ func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
 		return false
 	}
 
+	targets := equivalentModelIDs(modelID)
+	if len(targets) == 0 {
+		return false
+	}
+
 	for _, id := range models {
-		if strings.EqualFold(strings.TrimSpace(id), modelID) {
-			return true
+		trimmed := strings.TrimSpace(id)
+		for _, target := range targets {
+			if strings.EqualFold(trimmed, target) {
+				return true
+			}
 		}
 	}
 
@@ -832,6 +840,44 @@ func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.
 	}
 
 	return models, expiresAt
+}
+
+func sharedKiroAmazonQAliasID(modelID string) (string, bool) {
+	switch strings.TrimSpace(modelID) {
+	case "kiro-auto":
+		return "amazonq-auto", true
+	case "kiro-claude-opus-4-5":
+		return "amazonq-claude-opus-4.5", true
+	case "kiro-claude-sonnet-4-5":
+		return "amazonq-claude-sonnet-4.5", true
+	case "kiro-claude-sonnet-4":
+		return "amazonq-claude-sonnet-4", true
+	case "kiro-claude-haiku-4-5":
+		return "amazonq-claude-haiku-4.5", true
+	case "amazonq-auto":
+		return "kiro-auto", true
+	case "amazonq-claude-opus-4.5":
+		return "kiro-claude-opus-4-5", true
+	case "amazonq-claude-sonnet-4.5":
+		return "kiro-claude-sonnet-4-5", true
+	case "amazonq-claude-sonnet-4":
+		return "kiro-claude-sonnet-4", true
+	case "amazonq-claude-haiku-4.5":
+		return "kiro-claude-haiku-4-5", true
+	default:
+		return "", false
+	}
+}
+
+func equivalentModelIDs(modelID string) []string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil
+	}
+	if aliasID, ok := sharedKiroAmazonQAliasID(modelID); ok && !strings.EqualFold(aliasID, modelID) {
+		return []string{modelID, aliasID}
+	}
+	return []string{modelID}
 }
 
 func cloneModelMaps(models []map[string]any) []map[string]any {

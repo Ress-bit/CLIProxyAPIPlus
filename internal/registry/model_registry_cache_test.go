@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestGetAvailableModelsReturnsClonedSnapshots(t *testing.T) {
 	r := newTestModelRegistry()
@@ -50,5 +53,25 @@ func TestGetAvailableModelsInvalidatesCacheOnRegistryChanges(t *testing.T) {
 	models = r.GetAvailableModels("openai")
 	if len(models) != 1 {
 		t.Fatalf("expected model to reappear after resume, got %d", len(models))
+	}
+}
+
+func TestGetAvailableModels_KiroClientDoesNotExposeAmazonQAliases(t *testing.T) {
+	r := newTestModelRegistry()
+	r.RegisterClient("client-kiro", "kiro", []*ModelInfo{{ID: "kiro-claude-sonnet-4-5", OwnedBy: "aws", Type: "kiro", DisplayName: "Kiro Claude Sonnet 4.5"}})
+
+	models := r.GetAvailableModels("openai")
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		if id, ok := model["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+
+	if !slices.Contains(ids, "kiro-claude-sonnet-4-5") {
+		t.Fatalf("expected kiro model in available models, got %v", ids)
+	}
+	if slices.Contains(ids, "amazonq-claude-sonnet-4.5") {
+		t.Fatalf("did not expect amazonq alias in available models, got %v", ids)
 	}
 }

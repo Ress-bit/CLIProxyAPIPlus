@@ -24,12 +24,16 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 	modelRegistry.RegisterClient("test-request-details-claude", "claude", []*registry.ModelInfo{
 		{ID: "claude-sonnet-4-5", Created: now + 5},
 	})
+	modelRegistry.RegisterClient("test-request-details-kiro", "kiro", []*registry.ModelInfo{
+		{ID: "kiro-claude-haiku-4-5", Created: now + 3},
+	})
 
 	// Ensure cleanup of all test registrations.
 	clientIDs := []string{
 		"test-request-details-gemini",
 		"test-request-details-openai",
 		"test-request-details-claude",
+		"test-request-details-kiro",
 	}
 	for _, clientID := range clientIDs {
 		id := clientID
@@ -47,6 +51,13 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 		wantModel     string
 		wantErr       bool
 	}{
+		{
+			name:          "amazonq alias is not exposed through provider lookup",
+			inputModel:    "amazonq-claude-haiku-4.5",
+			wantProviders: nil,
+			wantModel:     "",
+			wantErr:       true,
+		},
 		{
 			name:          "numeric suffix preserved",
 			inputModel:    "gemini-2.5-pro(8192)",

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,73 @@ func (schedulerTestExecutor) CountTokens(ctx context.Context, auth *Auth, req cl
 
 func (schedulerTestExecutor) HttpRequest(ctx context.Context, auth *Auth, req *http.Request) (*http.Response, error) {
 	return nil, nil
+}
+
+type authScopedSchedulerExecutor struct {
+	id string
+
+	mu           sync.Mutex
+	executeCalls []string
+	streamCalls  []string
+}
+
+func (e *authScopedSchedulerExecutor) Identifier() string { return e.id }
+
+func (e *authScopedSchedulerExecutor) Execute(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	_ = ctx
+	_ = opts
+	call := ""
+	if auth != nil {
+		call = auth.ID + "|" + req.Model
+	}
+	e.mu.Lock()
+	e.executeCalls = append(e.executeCalls, call)
+	e.mu.Unlock()
+	return cliproxyexecutor.Response{Payload: []byte(call)}, nil
+}
+
+func (e *authScopedSchedulerExecutor) ExecuteStream(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	_ = ctx
+	_ = opts
+	call := ""
+	if auth != nil {
+		call = auth.ID + "|" + req.Model
+	}
+	e.mu.Lock()
+	e.streamCalls = append(e.streamCalls, call)
+	e.mu.Unlock()
+	ch := make(chan cliproxyexecutor.StreamChunk, 1)
+	ch <- cliproxyexecutor.StreamChunk{Payload: []byte(call)}
+	close(ch)
+	return &cliproxyexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (e *authScopedSchedulerExecutor) Refresh(ctx context.Context, auth *Auth) (*Auth, error) {
+	return auth, nil
+}
+
+func (e *authScopedSchedulerExecutor) CountTokens(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, nil
+}
+
+func (e *authScopedSchedulerExecutor) HttpRequest(ctx context.Context, auth *Auth, req *http.Request) (*http.Response, error) {
+	return nil, nil
+}
+
+func (e *authScopedSchedulerExecutor) ExecuteCalls() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, len(e.executeCalls))
+	copy(out, e.executeCalls)
+	return out
+}
+
+func (e *authScopedSchedulerExecutor) StreamCalls() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, len(e.streamCalls))
+	copy(out, e.streamCalls)
+	return out
 }
 
 type trackingSelector struct {
@@ -442,6 +510,127 @@ func TestManager_PickNextMixed_SkipsProvidersWithoutExecutors(t *testing.T) {
 	}
 	if got.ID != "claude-a" {
 		t.Fatalf("pickNextMixed() auth.ID = %q, want %q", got.ID, "claude-a")
+	}
+}
+
+func TestManager_PickNextMixed_AmazonQAliasesToKiroAuthAndExecutor(t *testing.T) {
+	t.Parallel()
+
+	const model = "amazonq-claude-sonnet-4.5"
+	registerSchedulerModels(t, "kiro", model, "kiro-a")
+
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	manager.executors["kiro"] = schedulerTestExecutor{}
+	if _, errRegister := manager.Register(context.Background(), &Auth{ID: "kiro-a", Provider: "kiro"}); errRegister != nil {
+		t.Fatalf("Register(kiro-a) error = %v", errRegister)
+	}
+
+	got, _, provider, errPick := manager.pickNextMixed(context.Background(), []string{"amazonq"}, model, cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickNextMixed() error = %v", errPick)
+	}
+	if got == nil {
+		t.Fatalf("pickNextMixed() auth = nil")
+	}
+	if provider != "kiro" {
+		t.Fatalf("pickNextMixed() provider = %q, want %q", provider, "kiro")
+	}
+	if got.ID != "kiro-a" {
+		t.Fatalf("pickNextMixed() auth.ID = %q, want %q", got.ID, "kiro-a")
+	}
+}
+
+func TestManager_Execute_AmazonQUsesKiroExecutorAndAuth(t *testing.T) {
+	t.Parallel()
+
+	const model = "amazonq-claude-sonnet-4.5"
+	registerSchedulerModels(t, "kiro", model, "kiro-a")
+
+	executor := &authScopedSchedulerExecutor{id: "kiro"}
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	manager.RegisterExecutor(executor)
+	if _, errRegister := manager.Register(context.Background(), &Auth{ID: "kiro-a", Provider: "kiro"}); errRegister != nil {
+		t.Fatalf("Register(kiro-a) error = %v", errRegister)
+	}
+
+	resp, errExecute := manager.Execute(context.Background(), []string{"amazonq"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("Execute() error = %v", errExecute)
+	}
+	if got := string(resp.Payload); got != "kiro-a|"+model {
+		t.Fatalf("Execute() payload = %q, want %q", got, "kiro-a|"+model)
+	}
+
+	calls := executor.ExecuteCalls()
+	if len(calls) != 1 {
+		t.Fatalf("len(executor.ExecuteCalls()) = %d, want %d", len(calls), 1)
+	}
+	if calls[0] != "kiro-a|"+model {
+		t.Fatalf("executor.ExecuteCalls()[0] = %q, want %q", calls[0], "kiro-a|"+model)
+	}
+}
+
+func TestManager_ExecuteStream_AmazonQUsesKiroExecutorAndAuth(t *testing.T) {
+	t.Parallel()
+
+	const model = "amazonq-claude-sonnet-4.5"
+	registerSchedulerModels(t, "kiro", model, "kiro-a")
+
+	executor := &authScopedSchedulerExecutor{id: "kiro"}
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	manager.RegisterExecutor(executor)
+	if _, errRegister := manager.Register(context.Background(), &Auth{ID: "kiro-a", Provider: "kiro"}); errRegister != nil {
+		t.Fatalf("Register(kiro-a) error = %v", errRegister)
+	}
+
+	streamResult, errExecute := manager.ExecuteStream(context.Background(), []string{"amazonq"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("ExecuteStream() error = %v", errExecute)
+	}
+	if streamResult == nil {
+		t.Fatalf("ExecuteStream() result = nil")
+	}
+
+	var payload []byte
+	for chunk := range streamResult.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("ExecuteStream() chunk error = %v", chunk.Err)
+		}
+		payload = append(payload, chunk.Payload...)
+	}
+	if got := string(payload); got != "kiro-a|"+model {
+		t.Fatalf("ExecuteStream() payload = %q, want %q", got, "kiro-a|"+model)
+	}
+
+	calls := executor.StreamCalls()
+	if len(calls) != 1 {
+		t.Fatalf("len(executor.StreamCalls()) = %d, want %d", len(calls), 1)
+	}
+	if calls[0] != "kiro-a|"+model {
+		t.Fatalf("executor.StreamCalls()[0] = %q, want %q", calls[0], "kiro-a|"+model)
+	}
+}
+
+func TestSchedulerPickSingle_AmazonQModelMatchesKiroRegisteredSupport(t *testing.T) {
+	t.Parallel()
+
+	const model = "amazonq-claude-sonnet-4.5"
+	registerSchedulerModels(t, "kiro", "kiro-claude-sonnet-4-5", "kiro-a")
+
+	scheduler := newSchedulerForTest(
+		&RoundRobinSelector{},
+		&Auth{ID: "kiro-a", Provider: "kiro"},
+	)
+
+	got, errPick := scheduler.pickSingle(context.Background(), "kiro", model, cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil {
+		t.Fatal("pickSingle() auth = nil")
+	}
+	if got.ID != "kiro-a" {
+		t.Fatalf("pickSingle() auth.ID = %q, want %q", got.ID, "kiro-a")
 	}
 }
 

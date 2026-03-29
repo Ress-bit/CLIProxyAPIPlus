@@ -147,3 +147,22 @@ func TestLookupModelInfoReturnsCloneForStaticDefinitions(t *testing.T) {
 		t.Fatalf("expected static lookup clone, got %+v", second)
 	}
 }
+
+func TestClientSupportsModel_KiroAmazonQAliasesMatchBothDirections(t *testing.T) {
+	r := newTestModelRegistry()
+	r.RegisterClient("client-kiro", "kiro", []*ModelInfo{{ID: "kiro-claude-sonnet-4-5"}})
+	r.RegisterClient("client-amazonq", "kiro", []*ModelInfo{{ID: "amazonq-claude-sonnet-4.5"}})
+
+	if !r.ClientSupportsModel("client-kiro", "kiro-claude-sonnet-4-5") {
+		t.Fatal("expected direct kiro model support")
+	}
+	if !r.ClientSupportsModel("client-kiro", "amazonq-claude-sonnet-4.5") {
+		t.Fatal("expected kiro client to support amazonq alias")
+	}
+	if !r.ClientSupportsModel("client-amazonq", "amazonq-claude-sonnet-4.5") {
+		t.Fatal("expected direct amazonq model support")
+	}
+	if !r.ClientSupportsModel("client-amazonq", "kiro-claude-sonnet-4-5") {
+		t.Fatal("expected amazonq client to support kiro alias")
+	}
+}

@@ -126,6 +126,16 @@ func (NoopHook) OnAuthUpdated(context.Context, *Auth) {}
 // OnResult implements Hook.
 func (NoopHook) OnResult(context.Context, Result) {}
 
+func canonicalProviderKey(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "amazonq":
+		return "kiro"
+	default:
+		return provider
+	}
+}
+
 // Manager orchestrates auth lifecycle, selection, execution, and persistence.
 type Manager struct {
 	store     Store
@@ -1586,7 +1596,7 @@ func (m *Manager) normalizeProviders(providers []string) []string {
 	result := make([]string, 0, len(providers))
 	seen := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
-		p := strings.TrimSpace(strings.ToLower(provider))
+		p := canonicalProviderKey(provider)
 		if p == "" {
 			continue
 		}
@@ -2180,7 +2190,7 @@ func (m *Manager) Executor(provider string) (ProviderExecutor, bool) {
 	if m == nil {
 		return nil, false
 	}
-	provider = strings.TrimSpace(provider)
+	provider = canonicalProviderKey(provider)
 	if provider == "" {
 		return nil, false
 	}
@@ -2340,7 +2350,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
-		p := strings.TrimSpace(strings.ToLower(provider))
+		p := canonicalProviderKey(provider)
 		if p == "" {
 			continue
 		}
@@ -2368,7 +2378,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		if pinnedAuthID != "" && candidate.ID != pinnedAuthID {
 			continue
 		}
-		providerKey := strings.TrimSpace(strings.ToLower(candidate.Provider))
+		providerKey := canonicalProviderKey(candidate.Provider)
 		if providerKey == "" {
 			continue
 		}
@@ -2399,7 +2409,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
-	providerKey := strings.TrimSpace(strings.ToLower(selected.Provider))
+	providerKey := canonicalProviderKey(selected.Provider)
 	executor, okExecutor := m.executors[providerKey]
 	if !okExecutor {
 		m.mu.RUnlock()
@@ -2426,7 +2436,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 	eligibleProviders := make([]string, 0, len(providers))
 	seenProviders := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
-		providerKey := strings.TrimSpace(strings.ToLower(provider))
+		providerKey := canonicalProviderKey(provider)
 		if providerKey == "" {
 			continue
 		}
