@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codebuddy"
@@ -31,6 +32,7 @@ const (
 	codeBuddyIDEVersion      = "2.63.2"
 	codeBuddyRequestedWith   = "XMLHttpRequest"
 	codeBuddyBearerPrefix    = "Bearer "
+	codeBuddyModelPrefix     = "codebuddy/"
 )
 
 // CodeBuddyExecutor handles requests to the CodeBuddy API.
@@ -91,7 +93,7 @@ func (e *CodeBuddyExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 
 // Execute performs a non-streaming request.
 func (e *CodeBuddyExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
-	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	baseModel := normalizeCodeBuddyModel(thinking.ParseSuffix(req.Model).ModelName)
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -108,8 +110,8 @@ func (e *CodeBuddyExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
 	}
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayloadSource, false)
-	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, false)
+	originalTranslated := translateCodeBuddyPayload(from, to, baseModel, originalPayloadSource, false)
+	translated := translateCodeBuddyPayload(from, to, baseModel, req.Payload, false)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
 
@@ -181,7 +183,7 @@ func (e *CodeBuddyExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 
 // ExecuteStream performs a streaming request.
 func (e *CodeBuddyExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {
-	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	baseModel := normalizeCodeBuddyModel(thinking.ParseSuffix(req.Model).ModelName)
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -198,8 +200,8 @@ func (e *CodeBuddyExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
 	}
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayloadSource, true)
-	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
+	originalTranslated := translateCodeBuddyPayload(from, to, baseModel, originalPayloadSource, true)
+	translated := translateCodeBuddyPayload(from, to, baseModel, req.Payload, true)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
 
@@ -293,6 +295,18 @@ func (e *CodeBuddyExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		Headers: httpResp.Header.Clone(),
 		Chunks:  out,
 	}, nil
+}
+
+func normalizeCodeBuddyModel(model string) string {
+	model = strings.TrimSpace(model)
+	if strings.HasPrefix(model, codeBuddyModelPrefix) {
+		return strings.TrimPrefix(model, codeBuddyModelPrefix)
+	}
+	return model
+}
+
+func translateCodeBuddyPayload(from, to sdktranslator.Format, baseModel string, payload []byte, stream bool) []byte {
+	return sdktranslator.TranslateRequest(from, to, baseModel, payload, stream)
 }
 
 // Refresh exchanges the CodeBuddy refresh token for a new access token.

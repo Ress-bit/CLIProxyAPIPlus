@@ -6,6 +6,8 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codebuddy"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	"github.com/tidwall/gjson"
 )
 
 func TestCodeBuddyCredentials_DefaultsToExternalDomain(t *testing.T) {
@@ -58,5 +60,31 @@ func TestCodeBuddyPrepareRequest_UsesExternalHeaders(t *testing.T) {
 	}
 	if got := req.Header.Get("X-User-Id"); got != "user-123" {
 		t.Fatalf("X-User-Id = %q, want %q", got, "user-123")
+	}
+}
+
+func TestNormalizeCodeBuddyModelStripsPrefix(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeCodeBuddyModel("codebuddy/gpt-5.4"); got != "gpt-5.4" {
+		t.Fatalf("expected prefixed CodeBuddy model to normalize, got %q", got)
+	}
+	if got := normalizeCodeBuddyModel("gpt-5.4"); got != "gpt-5.4" {
+		t.Fatalf("expected raw CodeBuddy model to stay unchanged, got %q", got)
+	}
+}
+
+func TestTranslateCodeBuddyPayload_UsesUnprefixedUpstreamModel(t *testing.T) {
+	t.Parallel()
+
+	translated := translateCodeBuddyPayload(
+		sdktranslator.FromString("openai"),
+		sdktranslator.FromString("openai"),
+		normalizeCodeBuddyModel("codebuddy/gpt-5.4"),
+		[]byte(`{"model":"codebuddy/gpt-5.4","messages":[{"role":"user","content":"hi"}]}`),
+		false,
+	)
+	if got := gjson.GetBytes(translated, "model").String(); got != "gpt-5.4" {
+		t.Fatalf("expected translated upstream model gpt-5.4, got %q", got)
 	}
 }
