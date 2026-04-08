@@ -1,6 +1,7 @@
 package management
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ type KiroQuotaResponse struct {
 	NextReset        *time.Time            `json:"next_reset,omitempty"`
 	UsagePercentage  float64               `json:"usage_percentage"`
 	SubscriptionInfo *KiroSubscriptionInfo `json:"subscription_info,omitempty"`
-	Breakdown        []KiroQuotaBreakdown  `json:"breakdown,omitempty"`
+	Breakdowns       []KiroQuotaBreakdown  `json:"breakdowns,omitempty"`
 }
 
 // KiroSubscriptionInfo contains subscription details
@@ -50,11 +51,15 @@ type KiroSubscriptionInfo struct {
 
 // KiroQuotaBreakdown contains detailed usage breakdown
 type KiroQuotaBreakdown struct {
-	ResourceType string  `json:"resource_type"`
-	Limit        float64 `json:"limit"`
-	CurrentUsage float64 `json:"current_usage"`
-	Remaining    float64 `json:"remaining"`
-	IsFreeTrial  bool    `json:"is_free_trial"`
+	ID           string     `json:"id"`
+	Label        string     `json:"label"`
+	ResourceType string     `json:"resource_type"`
+	Limit        float64    `json:"limit"`
+	CurrentUsage float64    `json:"current_usage"`
+	Remaining    float64    `json:"remaining"`
+	IsFreeTrial  bool       `json:"is_free_trial"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	NextReset    *time.Time `json:"next_reset,omitempty"`
 }
 
 // GetKiroQuota fetches Kiro (AWS CodeWhisperer) quota information from the /getUsageLimits endpoint.
@@ -111,18 +116,16 @@ func (h *Handler) GetKiroQuota(c *gin.Context) {
 		ProfileArn:   profileArn,
 	}
 
-	// Fetch quota status
-	quotaStatus, err := usageChecker.GetQuotaStatus(c.Request.Context(), tokenData)
-	if err != nil {
-		log.WithError(err).Debug("kiro quota request failed")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch kiro quota", "details": err.Error()})
+	credits, creditsErr := usageChecker.CheckCredits(c.Request.Context(), tokenData)
+	usage, usageErr := usageChecker.CheckUsage(c.Request.Context(), tokenData)
+	if creditsErr != nil && usageErr != nil {
+		log.WithError(creditsErr).Debug("kiro credits request failed")
+		log.WithError(usageErr).Debug("kiro usage request failed")
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":   "failed to fetch kiro quota",
+			"details": fmt.Sprintf("credits: %v; usage: %v", creditsErr, usageErr),
+		})
 		return
-	}
-
-	// Calculate usage percentage
-	usagePercentage := 0.0
-	if quotaStatus.TotalLimit > 0 {
-		usagePercentage = (quotaStatus.CurrentUsage / quotaStatus.TotalLimit) * 100
 	}
 
 	// Extract email from auth metadata
@@ -136,23 +139,180 @@ func (h *Handler) GetKiroQuota(c *gin.Context) {
 
 	// Build response
 	response := KiroQuotaResponse{
-		AuthIndex:       auth.Index,
-		Email:           email,
-		ProfileArn:      profileArn,
-		TotalLimit:      quotaStatus.TotalLimit,
-		CurrentUsage:    quotaStatus.CurrentUsage,
-		RemainingQuota:  quotaStatus.RemainingQuota,
-		IsExhausted:     quotaStatus.IsExhausted,
-		ResourceType:    quotaStatus.ResourceType,
-		UsagePercentage: usagePercentage,
+		AuthIndex:  auth.Index,
+		Email:      email,
+		ProfileArn: profileArn,
 	}
 
-	// Add next reset time if available
-	if !quotaStatus.NextReset.IsZero() {
-		response.NextReset = &quotaStatus.NextReset
+	if credits != nil {
+		response.RemainingQuota = credits.RemainingCredits
+		response.ResourceType = "CREDITS"
+		if credits.HasTotalCredits {
+			response.TotalLimit = credits.TotalCredits
+			response.CurrentUsage = credits.TotalCredits - credits.RemainingCredits
+			if response.CurrentUsage < 0 {
+				response.CurrentUsage = 0
+			}
+			if response.TotalLimit > 0 {
+				response.UsagePercentage = (response.CurrentUsage / response.TotalLimit) * 100
+			}
+			response.IsExhausted = credits.RemainingCredits <= 0
+		}
+		if credits.ResetDate != nil {
+			response.NextReset = credits.ResetDate
+		}
+		if credits.SubscriptionType != "" {
+			response.SubscriptionInfo = &KiroSubscriptionInfo{
+				Title: credits.SubscriptionType,
+				Type:  credits.SubscriptionType,
+			}
+		}
+		response.Breakdowns = buildKiroCreditsBreakdowns(credits)
+	}
+
+	if usage != nil {
+		if response.SubscriptionInfo == nil && usage.SubscriptionInfo != nil {
+			response.SubscriptionInfo = &KiroSubscriptionInfo{
+				Title: usage.SubscriptionInfo.SubscriptionTitle,
+				Type:  usage.SubscriptionInfo.Type,
+			}
+		}
+		if len(response.Breakdowns) == 0 {
+			response.Breakdowns = buildKiroQuotaBreakdowns(usage)
+		}
+		if response.TotalLimit <= 0 {
+			quotaStatus := kiroauth.BuildQuotaStatus(usage)
+			response.TotalLimit = quotaStatus.TotalLimit
+			response.CurrentUsage = quotaStatus.CurrentUsage
+			response.RemainingQuota = quotaStatus.RemainingQuota
+			response.IsExhausted = quotaStatus.IsExhausted
+			response.ResourceType = quotaStatus.ResourceType
+			if response.TotalLimit > 0 {
+				response.UsagePercentage = (response.CurrentUsage / response.TotalLimit) * 100
+			}
+			if response.NextReset == nil && !quotaStatus.NextReset.IsZero() {
+				response.NextReset = &quotaStatus.NextReset
+			}
+		}
+	}
+
+	if response.ResourceType == "" {
+		response.ResourceType = "CREDITS"
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func buildKiroCreditsBreakdowns(credits *kiroauth.KiroCreditsResponse) []KiroQuotaBreakdown {
+	if credits == nil {
+		return nil
+	}
+
+	limit := 0.0
+	current := 0.0
+	if credits.HasTotalCredits {
+		limit = credits.TotalCredits
+		current = credits.TotalCredits - credits.RemainingCredits
+		if current < 0 {
+			current = 0
+		}
+	}
+
+	return []KiroQuotaBreakdown{
+		{
+			ID:           "credits",
+			Label:        "Credit",
+			ResourceType: "CREDITS",
+			Limit:        limit,
+			CurrentUsage: current,
+			Remaining:    credits.RemainingCredits,
+			NextReset:    credits.ResetDate,
+		},
+	}
+}
+
+func buildKiroQuotaBreakdowns(usage *kiroauth.UsageQuotaResponse) []KiroQuotaBreakdown {
+	if usage == nil {
+		return nil
+	}
+
+	breakdowns := make([]KiroQuotaBreakdown, 0, len(usage.UsageBreakdownList)*2)
+	for idx, entry := range usage.UsageBreakdownList {
+		base := buildBreakdownEntry(entry, idx, "", false)
+		if base.Limit > 0 || base.CurrentUsage > 0 {
+			breakdowns = append(breakdowns, base)
+		}
+
+		if entry.FreeTrialInfo != nil {
+			free := buildFreeTrialEntry(entry, idx)
+			if free.Limit > 0 || free.CurrentUsage > 0 {
+				breakdowns = append(breakdowns, free)
+			}
+		}
+	}
+
+	return breakdowns
+}
+
+func buildBreakdownEntry(entry kiroauth.UsageBreakdownExtended, idx int, suffix string, isFree bool) KiroQuotaBreakdown {
+	label := strings.TrimSpace(entry.DisplayName)
+	if label == "" {
+		label = entry.ResourceType
+	}
+	if suffix != "" {
+		label = fmt.Sprintf("%s (%s)", label, suffix)
+	}
+
+	limit := entry.UsageLimitWithPrecision
+	current := entry.CurrentUsageWithPrecision
+	remaining := limit - current
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return KiroQuotaBreakdown{
+		ID:           fmt.Sprintf("%s_%d_%s", entry.ResourceType, idx, suffix),
+		Label:        label,
+		ResourceType: entry.ResourceType,
+		Limit:        limit,
+		CurrentUsage: current,
+		Remaining:    remaining,
+		IsFreeTrial:  isFree,
+		NextReset:    kiroauth.ParseUnixTimestamp(entry.NextDateReset),
+	}
+}
+
+func buildFreeTrialEntry(entry kiroauth.UsageBreakdownExtended, idx int) KiroQuotaBreakdown {
+	freeLimit := entry.FreeTrialInfo.UsageLimitWithPrecision
+	freeUsage := entry.FreeTrialInfo.CurrentUsageWithPrecision
+	freeRemaining := freeLimit - freeUsage
+	if freeRemaining < 0 {
+		freeRemaining = 0
+	}
+
+	label := strings.TrimSpace(entry.DisplayName)
+	if label == "" {
+		label = entry.ResourceType
+	}
+	label = fmt.Sprintf("%s (Free Trial)", label)
+
+	expiresAt := kiroauth.ParseUnixTimestamp(entry.FreeTrialInfo.FreeTrialExpiry)
+	nextReset := kiroauth.ParseUnixTimestamp(entry.FreeTrialInfo.NextDateReset)
+	if nextReset == nil {
+		nextReset = kiroauth.ParseUnixTimestamp(entry.NextDateReset)
+	}
+
+	return KiroQuotaBreakdown{
+		ID:           fmt.Sprintf("%s_%d_free", entry.ResourceType, idx),
+		Label:        label,
+		ResourceType: entry.ResourceType,
+		Limit:        freeLimit,
+		CurrentUsage: freeUsage,
+		Remaining:    freeRemaining,
+		IsFreeTrial:  true,
+		ExpiresAt:    expiresAt,
+		NextReset:    nextReset,
+	}
 }
 
 // findKiroAuth locates a Kiro credential by auth_index or returns the first available one
