@@ -798,6 +798,18 @@ func (h *OAuthWebHandler) handleImportToken(c *gin.Context) {
 	if tokenData.RefreshToken == "" {
 		tokenData.RefreshToken = refreshToken
 	}
+
+	// Enrich token data with user email so filename can include it when available.
+	if tokenData.Email == "" {
+		tokenData.Email = FetchUserEmailWithFallback(
+			c.Request.Context(),
+			h.cfg,
+			tokenData.AccessToken,
+			"",
+			tokenData.RefreshToken,
+		)
+	}
+
 	tokenData.AuthMethod = "social"
 	tokenData.Provider = "imported"
 
@@ -817,6 +829,7 @@ func (h *OAuthWebHandler) handleImportToken(c *gin.Context) {
 		"success":  true,
 		"message":  "Token imported successfully",
 		"fileName": fileName,
+		"email":    tokenData.Email,
 	})
 }
 
