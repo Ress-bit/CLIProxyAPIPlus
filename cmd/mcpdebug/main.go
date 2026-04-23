@@ -15,6 +15,12 @@ func main() {
 	fmt.Printf("Result length: %d bytes\n", len(resultBytes))
 
 	// Write to file for analysis
-	os.WriteFile("mcp_result.bin", resultBytes)
+	if err := writeResultFile("mcp_result.bin", resultBytes); err != nil {
+		panic(err)
+	}
 	fmt.Println("Wrote mcp_result.bin")
+}
+
+func writeResultFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o644)
 }

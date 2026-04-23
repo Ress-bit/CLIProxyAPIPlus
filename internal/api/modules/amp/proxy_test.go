@@ -33,6 +33,7 @@ func mkResp(status int, hdr http.Header, body []byte) *http.Response {
 		Header:        hdr,
 		Body:          io.NopCloser(bytes.NewReader(body)),
 		ContentLength: int64(len(body)),
+		Request:       httptest.NewRequest(http.MethodGet, "http://example.com/test", nil),
 	}
 }
 
