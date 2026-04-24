@@ -101,6 +101,84 @@ var (
 	errAuthFileNotFound   = errors.New("auth file not found")
 )
 
+func extractFirstJSONObject(input []byte) []byte {
+	start := -1
+	depth := 0
+	inString := false
+	escapeNext := false
+	for i, b := range input {
+		if start == -1 {
+			if b == '{' {
+				start = i
+				depth = 1
+			}
+			continue
+		}
+		if inString {
+			if escapeNext {
+				escapeNext = false
+				continue
+			}
+			if b == '\\' {
+				escapeNext = true
+				continue
+			}
+			if b == '"' {
+				inString = false
+			}
+			continue
+		}
+		if b == '"' {
+			inString = true
+			continue
+		}
+		if b == '{' {
+			depth++
+			continue
+		}
+		if b == '}' {
+			depth--
+			if depth == 0 {
+				return input[start : i+1]
+			}
+		}
+	}
+	if start != -1 {
+		return input[start:]
+	}
+	return nil
+}
+
+func decodeClineDirectTokenPayload(code string) *clineauth.TokenResponse {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil
+	}
+	decodeStrategies := []func(string) ([]byte, error){
+		base64.URLEncoding.DecodeString,
+		base64.RawURLEncoding.DecodeString,
+		base64.StdEncoding.DecodeString,
+		base64.RawStdEncoding.DecodeString,
+	}
+	for _, decode := range decodeStrategies {
+		decoded, err := decode(code)
+		if err != nil {
+			continue
+		}
+		var directToken clineauth.TokenResponse
+		parseErr := json.Unmarshal(decoded, &directToken)
+		if parseErr != nil {
+			if jsonOnly := extractFirstJSONObject(decoded); len(jsonOnly) > 0 {
+				parseErr = json.Unmarshal(jsonOnly, &directToken)
+			}
+		}
+		if parseErr == nil && strings.TrimSpace(directToken.AccessToken) != "" {
+			return &directToken
+		}
+	}
+	return nil
+}
+
 func extractLastRefreshTimestamp(meta map[string]any) (time.Time, bool) {
 	if len(meta) == 0 {
 		return time.Time{}, false
@@ -1316,11 +1394,15 @@ func (h *Handler) RequestClineToken(c *gin.Context) {
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		tokenResp, errToken := authSvc.ExchangeCode(ctx, authCode, callbackURL)
-		if errToken != nil {
-			log.Errorf("Failed to exchange Cline token: %v", errToken)
-			SetOAuthSessionError(state, "Failed to exchange token")
-			return
+		tokenResp := decodeClineDirectTokenPayload(authCode)
+		if tokenResp == nil {
+			var errToken error
+			tokenResp, errToken = authSvc.ExchangeCode(ctx, authCode, callbackURL)
+			if errToken != nil {
+				log.Errorf("Failed to exchange Cline token: %v", errToken)
+				SetOAuthSessionError(state, "Failed to exchange token")
+				return
+			}
 		}
 
 		email := strings.TrimSpace(tokenResp.Email)

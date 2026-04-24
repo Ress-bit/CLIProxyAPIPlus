@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -816,5 +817,76 @@ func TestRequestClineToken_SavesAuthRecord(t *testing.T) {
 	}
 	if got := fake.recordedRedirect(); got != "http://localhost:1455/callback" {
 		t.Fatalf("redirect uri = %q, want http://localhost:1455/callback", got)
+	}
+}
+
+func TestRequestClineToken_ParsesDirectTokenPayloadWithoutExchange(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	gin.SetMode(gin.TestMode)
+
+	store := &memoryAuthStore{}
+	authDir := t.TempDir()
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, coreauth.NewManager(nil, nil, nil))
+	h.tokenStore = store
+
+	prevFactory := newClineAuthService
+	fake := &fakeClineAuthService{
+		authURL: "https://cline.example.com/auth",
+		exchangeErr: errors.New("exchange should not be called"),
+	}
+	newClineAuthService = func(*config.Config) clineAuthService { return fake }
+	t.Cleanup(func() { newClineAuthService = prevFactory })
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	body := strings.NewReader(`{"callback_url":"http://localhost:1455/callback"}`)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/request-cline-token", body)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	h.RequestClineToken(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	state, _ := resp["state"].(string)
+	if state == "" {
+		t.Fatal("expected non-empty state")
+	}
+
+	directPayload := map[string]string{
+		"accessToken":  "direct-access-token",
+		"refreshToken": "direct-refresh-token",
+		"expiresAt":    "2026-04-24T12:34:56Z",
+		"email":        "direct@example.com",
+	}
+	raw, err := json.Marshal(directPayload)
+	if err != nil {
+		t.Fatalf("marshal direct payload: %v", err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	callbackFile := filepath.Join(authDir, ".oauth-cline-"+state+".oauth")
+	payload := `{"code":"` + encoded + `","state":"` + state + `"}`
+	if err := os.WriteFile(callbackFile, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write callback file: %v", err)
+	}
+
+	requireEventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.items) == 1
+	})
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.items) != 1 {
+		t.Fatalf("expected 1 saved auth record, got %d", len(store.items))
+	}
+	if got := fake.recordedCode(); got != "" {
+		t.Fatalf("expected ExchangeCode not to be called, got code %q", got)
 	}
 }
