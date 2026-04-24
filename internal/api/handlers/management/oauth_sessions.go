@@ -262,6 +262,10 @@ func NormalizeOAuthProvider(provider string) (string, error) {
 		return "antigravity", nil
 	case "codebuddy", "code-buddy":
 		return "codebuddy", nil
+	case "codebuddy-intl", "codebuddy_international", "code-buddy-intl":
+		return "codebuddy-intl", nil
+	case "cline":
+		return "cline", nil
 	case "kiro":
 		return "kiro", nil
 	case "github":

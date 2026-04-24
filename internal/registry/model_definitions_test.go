@@ -84,6 +84,56 @@ func TestCodexStaticModelsIncludeGPT55(t *testing.T) {
 	assertGPT55ModelInfo(t, "lookup", model)
 }
 
+func TestCodeBuddyIntlModelsAreDistinctFromCodeBuddy(t *testing.T) {
+	models := GetStaticModelDefinitionsByChannel("codebuddy-intl")
+	if len(models) == 0 {
+		t.Fatal("expected codebuddy-intl models")
+	}
+
+	model := findModelInfo(models, "default-model")
+	if model == nil {
+		t.Fatal("expected codebuddy-intl to include default-model")
+	}
+	if model.Type != "codebuddy-intl" {
+		t.Fatalf("model type = %q, want codebuddy-intl", model.Type)
+	}
+	if model.OwnedBy != "codebuddy" {
+		t.Fatalf("model owner = %q, want codebuddy", model.OwnedBy)
+	}
+	if !containsString(model.SupportedEndpoints, "/chat/completions") {
+		t.Fatalf("supported endpoints = %v, missing /chat/completions", model.SupportedEndpoints)
+	}
+
+	imageModel := findModelInfo(models, "gemini-3.0-pro-image")
+	if imageModel == nil {
+		t.Fatal("expected codebuddy-intl to include gemini-3.0-pro-image")
+	}
+	if !containsString(imageModel.SupportedOutputModalities, "IMAGE") {
+		t.Fatalf("supported output modalities = %v, missing IMAGE", imageModel.SupportedOutputModalities)
+	}
+}
+
+func TestClineModelsAreAvailableByChannel(t *testing.T) {
+	models := GetStaticModelDefinitionsByChannel("cline")
+	if len(models) == 0 {
+		t.Fatal("expected cline models")
+	}
+
+	model := findModelInfo(models, "claude-4-sonnet")
+	if model == nil {
+		t.Fatal("expected cline to include claude-4-sonnet")
+	}
+	if model.Type != "cline" {
+		t.Fatalf("model type = %q, want cline", model.Type)
+	}
+	if model.OwnedBy != "cline" {
+		t.Fatalf("model owner = %q, want cline", model.OwnedBy)
+	}
+	if !containsString(model.SupportedEndpoints, "/chat/completions") {
+		t.Fatalf("supported endpoints = %v, missing /chat/completions", model.SupportedEndpoints)
+	}
+}
+
 func findModelInfo(models []*ModelInfo, id string) *ModelInfo {
 	for _, model := range models {
 		if model != nil && model.ID == id {

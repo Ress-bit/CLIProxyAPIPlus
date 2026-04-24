@@ -20,9 +20,11 @@ import (
 )
 
 const (
-	ExternalBaseURL = "https://www.codebuddy.ai"
-	ExternalDomain  = "www.codebuddy.ai"
-	UserAgent       = "CLI/2.63.2 CodeBuddy/2.63.2"
+	ExternalBaseURL   = "https://www.codebuddy.ai"
+	ExternalDomain    = "www.codebuddy.ai"
+	IntlBaseURL       = "https://www.codebuddy.ai"
+	IntlDefaultDomain = "www.codebuddy.ai"
+	UserAgent         = "CLI/2.63.2 CodeBuddy/2.63.2"
 
 	codeBuddyStatePath   = "/v2/plugin/auth/state"
 	codeBuddyTokenPath   = "/v2/plugin/auth/token"
@@ -44,6 +46,14 @@ func NewCodeBuddyAuth(cfg *config.Config) *CodeBuddyAuth {
 		httpClient = util.SetProxy(&cfg.SDKConfig, httpClient)
 	}
 	return &CodeBuddyAuth{httpClient: httpClient, baseURL: ExternalBaseURL}
+}
+
+func NewCodeBuddyIntlAuth(cfg *config.Config) *CodeBuddyAuth {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	if cfg != nil {
+		httpClient = util.SetProxy(&cfg.SDKConfig, httpClient)
+	}
+	return &CodeBuddyAuth{httpClient: httpClient, baseURL: IntlBaseURL}
 }
 
 // AuthState holds the state and auth URL returned by the auth state API.

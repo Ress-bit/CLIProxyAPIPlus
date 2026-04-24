@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gin "github.com/gin-gonic/gin"
+	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -246,5 +247,37 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), "error-") && strings.HasSuffix(entry.Name(), ".log") {
 			t.Fatalf("unexpected forced error log in config dir %s", configLogsDir)
 		}
+	}
+}
+
+func TestClineCallbackWritesPendingOAuthFile(t *testing.T) {
+	server := newTestServer(t)
+	server.registerManagementRoutes()
+	server.managementRoutesEnabled.Store(true)
+
+	state := "cline-callback-test"
+	managementHandlers.RegisterOAuthSession(state, "cline")
+
+	req := httptest.NewRequest(http.MethodGet, "/cline/callback?code=test-code&state="+state, nil)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	filePath := filepath.Join(server.cfg.AuthDir, ".oauth-cline-"+state+".oauth")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read oauth callback file: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("decode callback payload: %v", err)
+	}
+	if got := payload["code"]; got != "test-code" {
+		t.Fatalf("callback code = %q, want test-code", got)
+	}
+	if got := payload["state"]; got != state {
+		t.Fatalf("callback state = %q, want %q", got, state)
 	}
 }

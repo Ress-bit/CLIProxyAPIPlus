@@ -119,6 +119,9 @@ func newDefaultAuthManager() *sdkAuth.Manager {
 		sdkAuth.NewCodexAuthenticator(),
 		sdkAuth.NewClaudeAuthenticator(),
 		sdkAuth.NewGitLabAuthenticator(),
+		sdkAuth.NewCodeBuddyAuthenticator(),
+		sdkAuth.NewCodeBuddyIntlAuthenticator(),
+		sdkAuth.NewClineAuthenticator(),
 	)
 }
 
@@ -446,6 +449,10 @@ func (s *Service) ensureExecutorsForAuthWithMode(a *coreauth.Auth, forceReplace 
 		s.coreManager.RegisterExecutor(executor.NewGitHubCopilotExecutor(s.cfg))
 	case "codebuddy":
 		s.coreManager.RegisterExecutor(executor.NewCodeBuddyExecutor(s.cfg))
+	case "codebuddy-intl":
+		s.coreManager.RegisterExecutor(executor.NewCodeBuddyIntlExecutor(s.cfg))
+	case "cline":
+		s.coreManager.RegisterExecutor(executor.NewClineExecutor(s.cfg))
 	case "gitlab":
 		s.coreManager.RegisterExecutor(executor.NewGitLabExecutor(s.cfg))
 	default:
@@ -984,6 +991,11 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "codebuddy":
 		models = registry.GetCodeBuddyModels()
+		models = applyExcludedModels(models, excluded)
+	case "cline":
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		models = executor.FetchClineModels(ctx, a, s.cfg)
 		models = applyExcludedModels(models, excluded)
 	default:
 		// Handle OpenAI-compatibility providers by name using config
