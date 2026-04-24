@@ -60,6 +60,12 @@ func (h *Handler) PostOAuthCallback(c *gin.Context) {
 		}
 	}
 
+	if state == "" && canonicalProvider == "cline" {
+		if inferredState, ok := FindPendingOAuthStateByProvider(canonicalProvider); ok {
+			state = inferredState
+		}
+	}
+
 	if state == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "state is required"})
 		return
