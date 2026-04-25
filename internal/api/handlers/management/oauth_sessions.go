@@ -217,36 +217,6 @@ func GetOAuthSession(state string) (provider string, status string, ok bool) {
 	return session.Provider, session.Status, true
 }
 
-func FindPendingOAuthStateByProvider(provider string) (string, bool) {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "" {
-		return "", false
-	}
-	now := time.Now()
-	oauthSessions.mu.Lock()
-	defer oauthSessions.mu.Unlock()
-	oauthSessions.purgeExpiredLocked(now)
-	matchedState := ""
-	count := 0
-	for state, session := range oauthSessions.sessions {
-		if !strings.EqualFold(session.Provider, provider) {
-			continue
-		}
-		if session.Status != "" {
-			continue
-		}
-		matchedState = state
-		count++
-		if count > 1 {
-			return "", false
-		}
-	}
-	if count == 1 {
-		return matchedState, true
-	}
-	return "", false
-}
-
 func IsOAuthSessionPending(state, provider string) bool {
 	return oauthSessions.IsPending(state, provider)
 }
@@ -294,8 +264,6 @@ func NormalizeOAuthProvider(provider string) (string, error) {
 		return "codebuddy", nil
 	case "codebuddy-intl", "codebuddy_international", "code-buddy-intl":
 		return "codebuddy-intl", nil
-	case "cline":
-		return "cline", nil
 	case "kiro":
 		return "kiro", nil
 	case "github":

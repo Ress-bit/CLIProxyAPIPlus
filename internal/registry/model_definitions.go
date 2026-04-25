@@ -689,8 +689,6 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetCodeBuddyModels()
 	case "codebuddy-intl":
 		return GetCodeBuddyIntlModels()
-	case "cline":
-		return GetClineModels()
 	case "cursor":
 		return GetCursorModels()
 	default:
@@ -733,7 +731,6 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		GetAmazonQModels(),
 		GetCodeBuddyModels(),
 		GetCodeBuddyIntlModels(),
-		GetClineModels(),
 		GetCursorModels(),
 	}
 	for _, models := range allModels {

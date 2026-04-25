@@ -2,7 +2,6 @@ package management
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	clineauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/cline"
 	codebuddyauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codebuddy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -89,45 +87,6 @@ func (f *fakeCodeBuddyService) recordedPollState() string {
 	f.pollMu.Lock()
 	defer f.pollMu.Unlock()
 	return f.pollState
-}
-
-type fakeClineAuthService struct {
-	authURL      string
-	exchange     *clineauth.TokenResponse
-	exchangeErr  error
-	lastCode     string
-	lastRedirect string
-	mu           sync.Mutex
-}
-
-func (f *fakeClineAuthService) GenerateAuthURL(state, callbackURL string) string {
-	if f.authURL != "" {
-		return f.authURL
-	}
-	return "https://cline.example.com/auth?state=" + state + "&callback=" + callbackURL
-}
-
-func (f *fakeClineAuthService) ExchangeCode(_ context.Context, code, redirectURI string) (*clineauth.TokenResponse, error) {
-	f.mu.Lock()
-	f.lastCode = code
-	f.lastRedirect = redirectURI
-	f.mu.Unlock()
-	if f.exchangeErr != nil {
-		return nil, f.exchangeErr
-	}
-	return f.exchange, nil
-}
-
-func (f *fakeClineAuthService) recordedCode() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lastCode
-}
-
-func (f *fakeClineAuthService) recordedRedirect() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lastRedirect
 }
 
 func TestRequestGitLabPATToken_SavesAuthRecord(t *testing.T) {
@@ -252,46 +211,6 @@ func TestPostOAuthCallback_GitLabWritesPendingCallbackFile(t *testing.T) {
 	}
 
 	filePath := filepath.Join(authDir, ".oauth-gitlab-"+state+".oauth")
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("read callback file: %v", err)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("decode callback payload: %v", err)
-	}
-	if got := payload["code"]; got != "test-code" {
-		t.Fatalf("callback code = %q, want test-code", got)
-	}
-	if got := payload["state"]; got != state {
-		t.Fatalf("callback state = %q, want %q", got, state)
-	}
-}
-
-func TestPostOAuthCallback_ClineCanInferPendingStateWhenMissing(t *testing.T) {
-	t.Setenv("MANAGEMENT_PASSWORD", "")
-	gin.SetMode(gin.TestMode)
-
-	authDir := t.TempDir()
-	state := "cline-state-123"
-	RegisterOAuthSession(state, "cline")
-	t.Cleanup(func() { CompleteOAuthSession(state) })
-
-	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, coreauth.NewManager(nil, nil, nil))
-
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/oauth-callback", strings.NewReader(`{"provider":"cline","redirect_url":"http://localhost:1455/callback?code=test-code"}`))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	h.PostOAuthCallback(ctx)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
-	}
-
-	filePath := filepath.Join(authDir, ".oauth-cline-"+state+".oauth")
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		t.Fatalf("read callback file: %v", err)
@@ -721,172 +640,5 @@ func TestRequestCodeBuddyIntlToken_SavesAuthRecord(t *testing.T) {
 	}
 	if got := fake.recordedPollState(); got != "remote-state-intl-123" {
 		t.Fatalf("polled state = %q, want remote-state-intl-123", got)
-	}
-}
-
-func TestRequestClineToken_SavesAuthRecord(t *testing.T) {
-	t.Setenv("MANAGEMENT_PASSWORD", "")
-	gin.SetMode(gin.TestMode)
-
-	store := &memoryAuthStore{}
-	authDir := t.TempDir()
-	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, coreauth.NewManager(nil, nil, nil))
-	h.tokenStore = store
-
-	prevFactory := newClineAuthService
-	fake := &fakeClineAuthService{
-		authURL: "https://cline.example.com/auth",
-		exchange: &clineauth.TokenResponse{
-			AccessToken:  "cline-access-token",
-			RefreshToken: "cline-refresh-token",
-			ExpiresAt:    "2026-04-24T12:34:56Z",
-			Email:        "cline@example.com",
-		},
-	}
-	newClineAuthService = func(*config.Config) clineAuthService { return fake }
-	t.Cleanup(func() { newClineAuthService = prevFactory })
-
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	body := strings.NewReader(`{"callback_url":"http://localhost:1455/callback"}`)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/request-cline-token", body)
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	h.RequestClineToken(ctx)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
-	}
-
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	assertJSONShape(t, resp, "status", "url", "state")
-	if got := resp["status"]; got != "ok" {
-		t.Fatalf("status = %#v, want ok", got)
-	}
-	state, _ := resp["state"].(string)
-	if state == "" {
-		t.Fatal("expected non-empty state")
-	}
-
-	provider, status, ok := GetOAuthSession(state)
-	if !ok {
-		t.Fatal("expected OAuth session to be registered")
-	}
-	if provider != "cline" {
-		t.Fatalf("provider = %q, want cline", provider)
-	}
-	if status != "" {
-		t.Fatalf("status = %q, want empty pending status", status)
-	}
-
-	callbackFile := filepath.Join(authDir, ".oauth-cline-"+state+".oauth")
-	payload := `{"code":"auth-code-123","state":"` + state + `"}`
-	if err := os.WriteFile(callbackFile, []byte(payload), 0o600); err != nil {
-		t.Fatalf("write callback file: %v", err)
-	}
-
-	requireEventually(t, func() bool {
-		store.mu.Lock()
-		defer store.mu.Unlock()
-		return len(store.items) == 1 && fake.recordedCode() == "auth-code-123"
-	})
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.items) != 1 {
-		t.Fatalf("expected 1 saved auth record, got %d", len(store.items))
-	}
-	var saved *coreauth.Auth
-	for _, item := range store.items {
-		saved = item
-	}
-	if saved == nil {
-		t.Fatal("expected saved auth record")
-	}
-	if saved.Provider != "cline" {
-		t.Fatalf("provider = %q, want cline", saved.Provider)
-	}
-	if saved.FileName != "cline-cline@example.com.json" {
-		t.Fatalf("file name = %q, want cline-cline@example.com.json", saved.FileName)
-	}
-	if got := fake.recordedCode(); got != "auth-code-123" {
-		t.Fatalf("exchange code = %q, want auth-code-123", got)
-	}
-	if got := fake.recordedRedirect(); got != "http://localhost:1455/callback" {
-		t.Fatalf("redirect uri = %q, want http://localhost:1455/callback", got)
-	}
-}
-
-func TestRequestClineToken_ParsesDirectTokenPayloadWithoutExchange(t *testing.T) {
-	t.Setenv("MANAGEMENT_PASSWORD", "")
-	gin.SetMode(gin.TestMode)
-
-	store := &memoryAuthStore{}
-	authDir := t.TempDir()
-	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, coreauth.NewManager(nil, nil, nil))
-	h.tokenStore = store
-
-	prevFactory := newClineAuthService
-	fake := &fakeClineAuthService{
-		authURL: "https://cline.example.com/auth",
-		exchangeErr: errors.New("exchange should not be called"),
-	}
-	newClineAuthService = func(*config.Config) clineAuthService { return fake }
-	t.Cleanup(func() { newClineAuthService = prevFactory })
-
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	body := strings.NewReader(`{"callback_url":"http://localhost:1455/callback"}`)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/request-cline-token", body)
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	h.RequestClineToken(ctx)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
-	}
-
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	state, _ := resp["state"].(string)
-	if state == "" {
-		t.Fatal("expected non-empty state")
-	}
-
-	directPayload := map[string]string{
-		"accessToken":  "direct-access-token",
-		"refreshToken": "direct-refresh-token",
-		"expiresAt":    "2026-04-24T12:34:56Z",
-		"email":        "direct@example.com",
-	}
-	raw, err := json.Marshal(directPayload)
-	if err != nil {
-		t.Fatalf("marshal direct payload: %v", err)
-	}
-	encoded := base64.RawURLEncoding.EncodeToString(raw)
-	callbackFile := filepath.Join(authDir, ".oauth-cline-"+state+".oauth")
-	payload := `{"code":"` + encoded + `","state":"` + state + `"}`
-	if err := os.WriteFile(callbackFile, []byte(payload), 0o600); err != nil {
-		t.Fatalf("write callback file: %v", err)
-	}
-
-	requireEventually(t, func() bool {
-		store.mu.Lock()
-		defer store.mu.Unlock()
-		return len(store.items) == 1
-	})
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.items) != 1 {
-		t.Fatalf("expected 1 saved auth record, got %d", len(store.items))
-	}
-	if got := fake.recordedCode(); got != "" {
-		t.Fatalf("expected ExchangeCode not to be called, got code %q", got)
 	}
 }

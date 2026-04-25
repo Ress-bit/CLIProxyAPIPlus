@@ -113,32 +113,10 @@ func TestCodeBuddyIntlModelsAreDistinctFromCodeBuddy(t *testing.T) {
 	}
 }
 
-func TestClineModelsAreAvailableByChannel(t *testing.T) {
+func TestClineModelsAreNotAvailableByChannel(t *testing.T) {
 	models := GetStaticModelDefinitionsByChannel("cline")
-	if len(models) == 0 {
-		t.Fatal("expected cline models")
-	}
-
-	required := []string{
-		"claude-4-sonnet",
-		"moonshotai/kimi-k2.6",
-		"kwaipilot/kat-coder-pro",
-		"arcee-ai/trinity-large-preview:free",
-	}
-	for _, modelID := range required {
-		model := findModelInfo(models, modelID)
-		if model == nil {
-			t.Fatalf("expected cline to include %s", modelID)
-		}
-		if model.Type != "cline" {
-			t.Fatalf("model %q type = %q, want cline", modelID, model.Type)
-		}
-		if model.OwnedBy != "cline" {
-			t.Fatalf("model %q owner = %q, want cline", modelID, model.OwnedBy)
-		}
-		if !containsString(model.SupportedEndpoints, "/chat/completions") {
-			t.Fatalf("model %q supported endpoints = %v, missing /chat/completions", modelID, model.SupportedEndpoints)
-		}
+	if len(models) != 0 {
+		t.Fatalf("expected no cline models, got %d", len(models))
 	}
 }
 
