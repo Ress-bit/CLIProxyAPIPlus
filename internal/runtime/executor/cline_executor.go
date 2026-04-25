@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -370,95 +368,5 @@ func clineIsFreeModel(m ClineModel) bool {
 }
 
 func FetchClineModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *config.Config) []*registry.ModelInfo {
-	httpClient := newProxyAwareHTTPClient(ctx, cfg, auth, 0)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clineBaseURLFromAuth(auth)+clineModelsEndpoint, nil)
-	if err != nil {
-		log.Warnf("cline: failed to create model fetch request: %v", err)
-		return registry.GetClineModels()
-	}
-	req.Header.Set("User-Agent", "Cline/"+clineVersion)
-	req.Header.Set("HTTP-Referer", "https://cline.bot")
-	req.Header.Set("X-Title", "Cline")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			log.Warnf("cline: fetch models canceled: %v", err)
-		} else {
-			log.Warnf("cline: fetch models failed: %v", err)
-		}
-		return registry.GetClineModels()
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Warnf("cline: failed to read models response: %v", err)
-		return registry.GetClineModels()
-	}
-	if resp.StatusCode != http.StatusOK {
-		log.Warnf("cline: fetch models failed: status %d, body: %s", resp.StatusCode, string(body))
-		return registry.GetClineModels()
-	}
-	var modelsResponse struct {
-		Data []ClineModel `json:"data"`
-	}
-	if err := json.Unmarshal(body, &modelsResponse); err != nil {
-		log.Warnf("cline: failed to parse models response: %v", err)
-		return registry.GetClineModels()
-	}
-	if len(modelsResponse.Data) == 0 {
-		result := gjson.GetBytes(body, "data")
-		if !result.Exists() {
-			result = gjson.ParseBytes(body)
-			if !result.IsArray() {
-				return registry.GetClineModels()
-			}
-		}
-		result.ForEach(func(_, value gjson.Result) bool {
-			id := value.Get("id").String()
-			if id == "" {
-				return true
-			}
-			modelsResponse.Data = append(modelsResponse.Data, ClineModel{
-				ID:          id,
-				Name:        value.Get("name").String(),
-				Description: value.Get("description").String(),
-				ContextLen:  int(value.Get("context_length").Int()),
-				MaxTokens:   int(value.Get("max_tokens").Int()),
-				Pricing: struct {
-					Prompt         string `json:"prompt"`
-					Completion     string `json:"completion"`
-					InputCacheRead string `json:"input_cache_read"`
-					WebSearch      string `json:"web_search"`
-				}{
-					Prompt:     value.Get("pricing.prompt").String(),
-					Completion: value.Get("pricing.completion").String(),
-				},
-			})
-			return true
-		})
-	}
-	now := time.Now().Unix()
-	var dynamicModels []*registry.ModelInfo
-	for _, m := range modelsResponse.Data {
-		if m.ID == "" || !clineIsFreeModel(m) {
-			continue
-		}
-		contextLen := m.ContextLen
-		if contextLen == 0 {
-			contextLen = 200000
-		}
-		maxTokens := m.MaxTokens
-		if maxTokens == 0 {
-			maxTokens = 64000
-		}
-		displayName := m.Name
-		if displayName == "" {
-			displayName = m.ID
-		}
-		dynamicModels = append(dynamicModels, &registry.ModelInfo{ID: m.ID, DisplayName: displayName, Description: m.Description, ContextLength: contextLen, MaxCompletionTokens: maxTokens, OwnedBy: "cline", Type: "cline", Object: "model", Created: now, SupportedEndpoints: []string{"/chat/completions"}})
-	}
-	if len(dynamicModels) == 0 {
-		return registry.GetClineModels()
-	}
-	return dynamicModels
+	return registry.GetClineModels()
 }

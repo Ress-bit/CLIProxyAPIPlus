@@ -38,7 +38,7 @@ func TestNewClineExecutor_UsesClineIdentifierAndBearerHeader(t *testing.T) {
 	}
 }
 
-func TestFetchClineModels_ReturnsOnlyFreeModels(t *testing.T) {
+func TestFetchClineModels_UsesStaticFallbackModels(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,11 +53,11 @@ func TestFetchClineModels_ReturnsOnlyFreeModels(t *testing.T) {
 
 	auth := &cliproxyauth.Auth{Metadata: map[string]any{"base_url": server.URL + "/api/v1"}}
 	models := FetchClineModels(context.Background(), auth, &config.Config{})
-	if len(models) != 1 {
-		t.Fatalf("models length = %d, want 1", len(models))
+	if len(models) == 0 {
+		t.Fatal("expected static fallback models")
 	}
-	if got := models[0].ID; got != "free-model" {
-		t.Fatalf("model id = %q, want free-model", got)
+	if got := models[0].ID; got != "cline/auto" {
+		t.Fatalf("first model id = %q, want cline/auto", got)
 	}
 }
 

@@ -119,18 +119,26 @@ func TestClineModelsAreAvailableByChannel(t *testing.T) {
 		t.Fatal("expected cline models")
 	}
 
-	model := findModelInfo(models, "claude-4-sonnet")
-	if model == nil {
-		t.Fatal("expected cline to include claude-4-sonnet")
+	required := []string{
+		"claude-4-sonnet",
+		"moonshotai/kimi-k2.6",
+		"kwaipilot/kat-coder-pro",
+		"arcee-ai/trinity-large-preview:free",
 	}
-	if model.Type != "cline" {
-		t.Fatalf("model type = %q, want cline", model.Type)
-	}
-	if model.OwnedBy != "cline" {
-		t.Fatalf("model owner = %q, want cline", model.OwnedBy)
-	}
-	if !containsString(model.SupportedEndpoints, "/chat/completions") {
-		t.Fatalf("supported endpoints = %v, missing /chat/completions", model.SupportedEndpoints)
+	for _, modelID := range required {
+		model := findModelInfo(models, modelID)
+		if model == nil {
+			t.Fatalf("expected cline to include %s", modelID)
+		}
+		if model.Type != "cline" {
+			t.Fatalf("model %q type = %q, want cline", modelID, model.Type)
+		}
+		if model.OwnedBy != "cline" {
+			t.Fatalf("model %q owner = %q, want cline", modelID, model.OwnedBy)
+		}
+		if !containsString(model.SupportedEndpoints, "/chat/completions") {
+			t.Fatalf("model %q supported endpoints = %v, missing /chat/completions", modelID, model.SupportedEndpoints)
+		}
 	}
 }
 
